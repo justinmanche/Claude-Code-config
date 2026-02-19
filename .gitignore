@@ -14,9 +14,11 @@
 !skills/**
 !output-styles/
 !output-styles/**
+!scripts/
 !scripts/**
+!rules/
 !rules/**
-!projects/**
+!hooks/
 !hooks/**
 !settings.json
 
