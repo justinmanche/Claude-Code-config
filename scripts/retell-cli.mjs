@@ -1,1 +1,0 @@
-/Users/jm0002/code/retell-flowkit/scripts/retell-cli.mjs
