@@ -41,6 +41,7 @@ Failure to follow these patterns creates technical debt and inconsistency across
 | `leon-writing-style/` | Style-matched content generation          | Writing content matching user's style    |
 | `arxiv-to-md/`        | arXiv paper to markdown conversion        | Converting papers for LLM consumption    |
 | `cc-history/`         | Claude Code conversation history analysis | Querying past conversations, token usage |
+| `site-review/`        | Browser-based site quality audit          | Reviewing site UI/UX, bugs, best practices |
 
 ## Script Invocation
 
