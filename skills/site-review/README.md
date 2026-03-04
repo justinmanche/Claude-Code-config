@@ -20,10 +20,15 @@ SCOPE -> UNDERSTAND -> MAP -> INSPECT (iterative) -> CATALOG -> ASSESS -> PLAN
 3. **MAP**: Navigates to the site in browser, screenshots homepage, catalogs
    all accessible pages and user flows.
 
-4. **INSPECT**: Iterative deep review (2-6 passes). Each iteration navigates
-   pages, takes screenshots, tests interactions, and records findings across
-   seven categories: UI/UX, Bugs, Best Practices, Accessibility, Design
-   Consistency, Performance, Redundancy.
+4. **INSPECT**: Iterative deep review (2-10 passes). Each iteration follows a
+   4-phase methodology: page-level inspection (SaaS page standards audit),
+   interaction testing (systematic CRUD protocol per entity), API-UI
+   cross-reference (detect missing UI for API endpoints), and industry standard
+   comparison (web research for best practices). Records findings across ten
+   categories: UI/UX, Bugs, Best Practices, Missing Functionality, Orphaned
+   Elements, Negative Path Handling, Accessibility, Design Consistency,
+   Performance, Redundancy. Coverage confidence requires ALL pages visited,
+   ALL entities CRUD-tested, and negative paths tested before reporting CERTAIN.
 
 5. **CATALOG**: Compiles all findings into `site-review-findings.md` with
    structured tables by category.
