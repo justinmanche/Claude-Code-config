@@ -11,4 +11,5 @@ navigation to find UI/UX issues, bugs, and improvement opportunities.
 | `README.md` | Architecture, workflow, rationale | Understanding the design |
 
 Python code: `scripts/skills/site_review/review.py` (orchestrator),
+`inspect_agent.py` (per-page inspection sub-agent),
 `verify_agent.py` (code verification sub-agent)

@@ -20,15 +20,17 @@ SCOPE -> UNDERSTAND -> MAP -> INSPECT (iterative) -> CATALOG -> ASSESS -> PLAN
 3. **MAP**: Navigates to the site in browser, screenshots homepage, catalogs
    all accessible pages and user flows.
 
-4. **INSPECT**: Iterative deep review (2-10 passes). Each iteration follows a
-   4-phase methodology: page-level inspection (SaaS page standards audit),
-   interaction testing (systematic CRUD protocol per entity), API-UI
-   cross-reference (detect missing UI for API endpoints), and industry standard
-   comparison (web research for best practices). Records findings across ten
-   categories: UI/UX, Bugs, Best Practices, Missing Functionality, Orphaned
-   Elements, Negative Path Handling, Accessibility, Design Consistency,
-   Performance, Redundancy. Coverage confidence requires ALL pages visited,
+4. **INSPECT**: Dispatches parallel sub-agents for systematic page inspection.
+   Each sub-agent receives a batch of 1-4 related pages and runs a 4-step
+   workflow (Orient, Browse, Audit, Report). Every sub-agent MUST check ALL
+   SaaS page standards (Navigation + General + page-type-specific) and ALL
+   14 issue categories for every assigned page. Sub-agents return structured
+   findings with mandatory completion checklists proving full coverage. The
+   orchestrator aggregates results, verifies checklists, handles API-UI
+   cross-reference, negative path testing, and industry standard comparison.
+   Coverage confidence requires ALL pages inspected with complete checklists,
    ALL entities CRUD-tested, and negative paths tested before reporting CERTAIN.
+   If gaps exist, additional sub-agents are dispatched for uncovered pages.
 
 5. **CATALOG**: Compiles all findings into `site-review-findings.md` with
    structured tables by category.
@@ -67,6 +69,21 @@ uncovered areas and new issues, making repeated runs productive.
 
 - `site-review-findings.md`: Raw findings organized by category
 - `site-review-plan.md`: Prioritized remediation plan with phases
+
+## Site Map File
+
+For thorough coverage, provide a `site-map.md` in your project root listing
+all pages, API endpoints, entities, and user flows. The SCOPE step searches
+for this file automatically and uses it as the authoritative navigation
+checklist.
+
+If no site map exists, the skill will ask whether to generate one from the
+codebase or proceed without it. You can also provide any file containing
+route/endpoint information (API docs, route configs, etc.) and the skill
+will transform it into canonical format.
+
+See the canonical format in `scripts/skills/site_review/review.py`
+(`SITE_MAP_FORMAT` constant).
 
 ## Project Configuration
 

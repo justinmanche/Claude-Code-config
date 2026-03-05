@@ -6,7 +6,11 @@
     "claude-code-setup@claude-plugins-official": true,
     "skill-creator@claude-plugins-official": true
   },
+<<<<<<< Updated upstream
   "permissions": {
     "allow": ["Bash(*)", "Read(*)", "Write(*)", "Edit(*)", "Agent(*)"]
   }
+=======
+  "effortLevel": "high"
+>>>>>>> Stashed changes
 }
