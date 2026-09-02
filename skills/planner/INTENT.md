@@ -646,12 +646,21 @@ Step 14: plan-docs-qr-route
 
 10 steps. Implements the approved plan.
 
+Step 1 establishes the state dir: pass the planner's `--state-dir`, or
+`--plan <path>` (plan.json, or plan.md with a sibling .json) to build one.
+It synthesizes context.json from plan.json when missing, computes waves
+(falling back to one milestone per wave when the plan has none), and tracks
+progress in exec-state.json (Python-managed; the LLM never reads it).
+`--reconcile` dispatches quality reviewers to mark already-satisfied
+milestones `--done` before execution.
+
 ```
 Step 1: exec-init
-  Action: Analyze plan, build wave dependency graph
+  Action: Locate plan.json, build waves, write exec-state.json
+  Optional: --reconcile (resume), --done M-XXX (repeatable)
 
 Step 2: impl-code-work
-  Agent: developer (up to 4 parallel per wave)
+  Agent: developer (one per milestone in current wave, parallel)
   Script: developer/exec_implement.py (router)
   Routing: If qr-impl-code.json has FAIL items -> developer/exec_implement_qr_fix.py
            Otherwise -> developer/exec_implement_execute.py
@@ -672,8 +681,9 @@ Step 4: impl-code-qr-verify
   Next: Step 5
 
 Step 5: impl-code-qr-route
-  Route: All PASS -> delete qr file, proceed to Step 6
-         Any FAIL -> loop to Step 2
+  Route: All PASS -> delete qr file, mark wave complete;
+         more waves -> loop to Step 2 (next wave), else proceed to Step 6
+         Any FAIL -> loop to Step 2 (fix mode)
 
 Step 6: impl-docs-work
   Agent: technical-writer
@@ -700,11 +710,14 @@ Step 9: impl-docs-qr-route
   Route: All PASS -> delete qr file, proceed to Step 10
          Any FAIL -> loop to Step 6
 
-Step 10: wave-next
-  Action: Advance to next wave, repeat Steps 2-9 for each wave
-  Route: More waves -> loop to Step 2
-         All waves complete -> EXECUTION COMPLETE
+Step 10: retrospective
+  Action: Present execution summary (terminal)
 ```
+
+Code QR (Steps 2-5) repeats per wave; documentation (Steps 6-9) runs ONCE
+after the final wave. Re-documenting after every wave would redo
+CLAUDE.md/README work N times for one final state -- one TW pass over the
+completed implementation produces the same artifact at 1/N the cost.
 
 ## Script Organization
 
@@ -720,7 +733,7 @@ Scripts follow router-dispatch pattern. Each QR-able phase has:
 skills/planner/
   orchestrator/
     planner.py       -- 14-step planning workflow
-    executor.py      -- 12-step execution workflow
+    executor.py      -- 10-step execution workflow
   architect/
     plan_design.py            -- router (detects state, dispatches)
     plan_design_execute.py    -- first execution (6 steps)

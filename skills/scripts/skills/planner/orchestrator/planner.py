@@ -689,6 +689,9 @@ def main():
             if plan_path:
                 print(f"\nPlan rendered to: {plan_path}")
                 print("Copy this file to the user's requested output path.")
+                print("ALSO copy plan.json from the same directory alongside it")
+                print("(same basename, .json extension). Execution mode reads the JSON:")
+                print(f"  python3 -m skills.planner.orchestrator.executor --step 1 --state-dir {args.state_dir}")
     else:
         print(result)
 

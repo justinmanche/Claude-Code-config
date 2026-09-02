@@ -44,42 +44,50 @@ runs until both pass.
 ## Execution Workflow
 
 ```
-  Plan --> Milestones --> QR --> Docs --> Retrospective
-               ^          |
-               +- [fail] -+
-
-  * Reconciliation phase precedes Milestones when resuming partial work
+  Init --> Wave: Devs --> Code-QR --> route --+--> next wave (loop)
+             ^               |                |
+             +--- [fail] ----+                +--> Docs --> Doc-QR --> route --> Retrospective
+                                                    ^                   |
+                                                    +------ [fail] -----+
 ```
 
-After planning completes and context clears (`/clear`), execution proceeds:
+After planning completes and context clears (`/clear`), execution proceeds
+(10 steps; step 1 needs `--plan <plan.md-or-plan.json>` or the planner's
+`--state-dir`, plus `--reconcile` when resuming partial work):
 
-| Step                   | Purpose                                                         |
-| ---------------------- | --------------------------------------------------------------- |
-| Execution Planning     | Analyze plan, detect reconciliation signals, output strategy    |
-| Reconciliation         | (conditional) Validate existing code against plan               |
-| Milestone Execution    | Delegate to agents, run tests; repeat until all complete        |
-| Post-Implementation QR | Quality review of implemented code                              |
-| Issue Resolution       | (conditional) Present issues, collect decisions, delegate fixes |
-| Documentation          | Technical writer updates CLAUDE.md/README.md                    |
-| Retrospective          | Present execution summary                                       |
+| Step | Name                   | Purpose                                                       |
+| ---- | ---------------------- | ------------------------------------------------------------- |
+| 1    | exec-init              | Locate plan.json, build waves, write exec-state.json          |
+| 2    | impl-code-work         | One developer per milestone in current wave (parallel)        |
+| 3    | impl-code-qr-decompose | QR agent writes qr-impl-code.json verification items          |
+| 4    | impl-code-qr-verify    | N QR agents verify items in parallel                          |
+| 5    | impl-code-qr-route     | FAIL: fix loop to 2. PASS: next wave (2) or docs (6)          |
+| 6    | impl-docs-work         | Technical writer updates CLAUDE.md/README.md                  |
+| 7-9  | impl-docs QR block     | Same decompose/verify/route pattern for documentation         |
+| 10   | Retrospective          | Present execution summary                                     |
+
+Code QR runs per wave so a broken foundation wave is caught before dependent
+waves build on it; documentation runs once over the finished implementation.
 
 I designed the coordinator to never write code directly -- it delegates to
 developers. Separating coordination from implementation produces cleaner
 results. The coordinator:
 
-- Parallelizes independent work across up to 4 developers per milestone
-- Runs quality review after all milestones complete
-- Loops through issue resolution until QR passes
-- Invokes technical writer only after QR passes
+- Parallelizes independent milestones within a wave (one developer each)
+- Runs Code QR after every wave, before dependent waves start
+- Loops work -> decompose -> verify -> route until QR passes (max 5 iterations,
+  with progressive severity de-escalation)
+- Invokes technical writer only after all waves pass Code QR
 
-**Reconciliation** handles resume scenarios. When the user request contains
-signals like "already implemented", "resume", or "partially complete", the
-workflow validates existing code against plan requirements before executing
-remaining milestones. Building on unverified code means rework.
+**Reconciliation** handles resume scenarios. Invoke step 1 with `--reconcile`
+when the request contains signals like "already implemented", "resume", or
+"partially complete": quality reviewers validate existing code against each
+pending milestone, and SATISFIED milestones are marked `--done` before
+execution. Building on unverified code means rework.
 
-**Issue Resolution** presents each QR finding individually with options (Fix /
-Skip / Alternative). Fixes delegate to developers or technical writers, then QR
-runs again. This cycle repeats until QR passes.
+**Issue Resolution** is automatic: the route step loops to the work step,
+whose router detects FAIL items in qr-impl-code.json and dispatches the fix
+workflow (exec_implement_qr_fix.py / exec_docs_qr_fix.py) instead of execute.
 
 ## Invisible Knowledge
 
