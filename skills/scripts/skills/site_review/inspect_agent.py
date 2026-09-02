@@ -1,22 +1,38 @@
 #!/usr/bin/env python3
 """
-Site Review Inspect Agent - Deep per-page inspection sub-agent.
+Site Review Test Agent - Executes a slice of ledger actions in the browser.
+
+This is NOT a passive inspector. It DRIVES each assigned action for real --
+positive and negative -- compares the result against the behaviour oracle,
+updates the action's row in the shared ledger, and appends findings.
 
 Four-step workflow:
-  1. ORIENT   - Parse assigned pages, identify types and entities
-  2. BROWSE   - Navigate to each page, screenshot, observe
-  3. AUDIT    - Systematically check ALL standards and ALL categories
-  4. REPORT   - Output structured findings with completion checklist
+  1. ORIENT   - Parse the assigned ledger row IDs, role, and pages; log in
+  2. EXERCISE - Perform each action for real, incl. the input matrix and
+                negative/authz variants; screenshot before/after
+  3. JUDGE    - Compare each result to the oracle; classify PASS/FAIL
+  4. RECORD   - Update ledger rows and append findings; return a coverage report
 
-Each agent receives a batch of 1-4 pages to inspect thoroughly.
-The agent MUST check every SaaS page standard and every issue category
-for every assigned page -- nothing may be skipped.
+The agent is assigned a coherent slice (one role + related pages/entity) so it
+can hold a single session throughout.
 """
 
 import argparse
 import sys
 
 from skills.lib.workflow.prompts import format_step
+
+# Import the shared reference content from the orchestrator so both stay in sync.
+from skills.site_review.review import (
+    EVIDENCE_FORMAT,
+    INPUT_TESTING_MATRIX,
+    INTERACTION_TESTING_PROTOCOL,
+    ISSUE_CATEGORIES,
+    LEDGER_DIR,
+    SAAS_PAGE_STANDARDS,
+    SHALLOW_BUG_CHECKS,
+    EXPERIENCE_CHECKS,
+)
 
 
 # ============================================================================
@@ -28,261 +44,140 @@ TOTAL_STEPS = 4
 
 
 # ============================================================================
-# SHARED PROMPTS
+# STEP 1: ORIENT
 # ============================================================================
-
-# Import the full checklists from the parent module so they stay in sync
-from skills.site_review.review import (
-    EVIDENCE_FORMAT,
-    INTERACTION_TESTING_PROTOCOL,
-    ISSUE_CATEGORIES,
-    SAAS_PAGE_STANDARDS,
-)
-
-
-# ============================================================================
-# MESSAGE TEMPLATES
-# ============================================================================
-
-# --- STEP 1: ORIENT --------------------------------------------------------
 
 ORIENT_INSTRUCTIONS = (
-    "ORIENT - Parse your page assignment and prepare for inspection.\n"
+    "ORIENT - Load your assigned slice and establish your session.\n"
     "\n"
-    "Your assigned pages were specified in your launching prompt.\n"
+    "Your launch prompt names: the ledger row IDs you own, the ROLE to act as,\n"
+    "the credentials, and the pages involved. The site URL and the ledger +\n"
+    f"findings file paths (under `{LEDGER_DIR}/`) are in shared context.\n"
     "\n"
     "ACTIONS:\n"
-    "  1. Identify your assigned pages (routes and URLs)\n"
-    "  2. For each page, determine its TYPE from:\n"
-    "     Dashboard, List/Table, Detail/View, Create/Edit Form,\n"
-    "     Settings, Auth, Profile, Search Results, Billing,\n"
-    "     Audit Log, Integrations, Onboarding/Wizard,\n"
-    "     Notification Center, Reports/Analytics, Calendar,\n"
-    "     Kanban Board, Import/Export, Error Page, Other\n"
-    "  3. Identify which entities (from the entity model) are\n"
-    "     relevant to your assigned pages\n"
-    "  4. Note any auth credentials or prerequisites needed\n"
-    "  5. Note any Known Issues / Exclusions to respect\n"
+    f"  1. Read `{LEDGER_DIR}/ledger.md` and extract YOUR assigned rows (exact IDs).\n"
+    "  2. For each row, note: Page, Action, Variant (positive vs which negative),\n"
+    "     and the oracle expectation (from the model summary in shared context).\n"
+    "  3. Open the browser and log in AS YOUR ASSIGNED ROLE (register / accept an\n"
+    "     invite / use seeded creds as directed). If the slice is an\n"
+    "     unauthenticated or cross-role authz slice, set up that state instead.\n"
+    "  4. Confirm you are on the right site and identity before proceeding.\n"
     "\n"
     "OUTPUT:\n"
     "```\n"
-    "PAGE ASSIGNMENT:\n"
-    "  Page 1: [route] - Type: [type] - Entities: [list]\n"
-    "  Page 2: [route] - Type: [type] - Entities: [list]\n"
-    "  Auth needed: [yes/no] - Credentials: [if applicable]\n"
-    "  Exclusions: [any known issues to skip]\n"
+    "SLICE: role=[role] rows=[A012..A039] pages=[/x, /y]\n"
+    "Session: [logged in as .. / unauthenticated / role-B for authz denial]\n"
     "```"
 )
 
-# --- STEP 2: BROWSE --------------------------------------------------------
 
-BROWSE_INSTRUCTIONS = (
-    "BROWSE - Navigate to each assigned page and observe.\n"
-    "\n"
-    "For EACH assigned page:\n"
-    "\n"
-    "  1. Navigate to the page URL in the browser\n"
-    "  2. If auth required, log in first (use credentials from ORIENT)\n"
-    "  3. Wait for FULL page load (all spinners/skeletons must resolve)\n"
-    "  4. Take a screenshot of the fully loaded page\n"
-    "  5. Scroll the FULL page length -- screenshot the bottom too\n"
-    "  6. If the page has tabs, sub-nav, or collapsible sections:\n"
-    "     click each one and screenshot each state\n"
-    "  7. If the page has modals or dropdowns, open each and screenshot\n"
-    "  8. Note all interactive elements visible on the page\n"
-    "\n"
-    "RECORD for each page:\n"
-    "```\n"
-    "PAGE: [route]\n"
-    "  Load time: [fast/medium/slow]\n"
-    "  Data loaded: [automatically/requires action/empty]\n"
-    "  States observed: [default, tab1, tab2, modal, etc.]\n"
-    "  Interactive elements:\n"
-    "    - [element type]: [description] - [location on page]\n"
-    "  Console errors: [any JS errors visible]\n"
-    "  Network errors: [any failed API calls]\n"
-    "```\n"
-    "\n"
-    "Take thorough notes. The AUDIT step will reference these observations."
-)
+# ============================================================================
+# STEP 2: EXERCISE
+# ============================================================================
 
-# --- STEP 3: AUDIT ---------------------------------------------------------
-
-AUDIT_INSTRUCTIONS = (
-    "AUDIT - Systematically check EVERY standard and EVERY category.\n"
+EXERCISE_INSTRUCTIONS = (
+    "EXERCISE - Perform every assigned action FOR REAL. Do not describe what\n"
+    "would happen; make it happen and observe.\n"
     "\n"
-    "This is the critical step. You MUST be exhaustive.\n"
-    "Do NOT skip any checklist item. Check EVERY SINGLE ONE.\n"
+    "For EACH assigned ledger row:\n"
+    "  1. Navigate to the row's Page in the correct state.\n"
+    "  2. Screenshot BEFORE the action.\n"
+    "  3. Perform the action's Variant:\n"
+    "     - POSITIVE variant: do the happy path with valid data; confirm success\n"
+    "       feedback, THEN hard-reload and re-read every field — the toast is NOT\n"
+    "       proof of persistence (see SHALLOW-BUG CHECKS).\n"
+    "     - NEGATIVE / INPUT variant: drive the specific invalid input or edge\n"
+    "       condition for this row from the matrix below; observe the response.\n"
+    "     - AUTHZ variant: attempt the action as a role that should be denied,\n"
+    "       incl. editing a URL id to another owner's record; confirm it is blocked.\n"
+    "     - RELOAD/BACK/CONCURRENCY variants: perform the specific hazard.\n"
+    "  4. Screenshot AFTER. Capture any console error and any failed network call\n"
+    "     (open the network/console tools; a 4xx/5xx or JS error during a normal\n"
+    "     action is itself a finding).\n"
+    "  5. If performing the action reveals NEW actions not in your rows (a new\n"
+    "     modal, a follow-up step), note them for RECORD to append to the ledger.\n"
     "\n"
-    "For EACH assigned page, complete ALL three audits:\n"
+    "INPUT TESTING MATRIX (apply the rows relevant to each field):\n"
+    + INPUT_TESTING_MATRIX + "\n"
     "\n"
-    "═══════════════════════════════════════════════\n"
-    "AUDIT 1: SaaS PAGE STANDARDS\n"
-    "═══════════════════════════════════════════════\n"
-    "\n"
-    "Based on the page type identified in ORIENT, check EVERY standard\n"
-    "feature listed below. You MUST also check NAVIGATION and GENERAL\n"
-    "standards on every page regardless of type.\n"
-    "\n"
-    + SAAS_PAGE_STANDARDS + "\n"
-    "\n"
-    "For EACH standard feature for this page's type(s):\n"
-    "  - EXPECTED features: check and record PASS or FINDING\n"
-    "  - COMMON features: check and record PASS, FINDING, or N/A\n"
-    "  - DOMAIN-SPECIFIC: only check if applicable\n"
-    "\n"
-    "OUTPUT per page (MANDATORY -- do not skip any line):\n"
-    "```\n"
-    "STANDARDS AUDIT: [route] (Type: [type])\n"
-    "\n"
-    "  NAVIGATION:\n"
-    "    [x] Persistent primary nav visible\n"
-    "    [x] Active state for current page in nav\n"
-    "    [ ] Browser tab title reflects page -- FINDING\n"
-    "    ... (check EVERY navigation standard)\n"
-    "\n"
-    "  GENERAL:\n"
-    "    [x] Page renders without broken layout\n"
-    "    [ ] No empty section without message -- FINDING\n"
-    "    ... (check EVERY general standard)\n"
-    "\n"
-    "  [PAGE TYPE] (e.g., LIST/TABLE):\n"
-    "    [x] Data loads automatically\n"
-    "    [ ] Column headers sortable -- FINDING\n"
-    "    ... (check EVERY standard for this type)\n"
-    "```\n"
-    "\n"
-    "═══════════════════════════════════════════════\n"
-    "AUDIT 2: ISSUE CATEGORIES\n"
-    "═══════════════════════════════════════════════\n"
-    "\n"
-    "Check EVERY issue category below against what you observed.\n"
-    "For each category, actively look for the listed symptoms.\n"
-    "\n"
-    + ISSUE_CATEGORIES + "\n"
-    "\n"
-    "OUTPUT per page (MANDATORY -- check every category):\n"
-    "```\n"
-    "CATEGORY AUDIT: [route]\n"
-    "\n"
-    "  BUGS: [N findings] / [checked]\n"
-    "    - [finding description if any]\n"
-    "  MISSING FUNCTIONALITY: [N findings] / [checked]\n"
-    "    - [finding description if any]\n"
-    "  NEGATIVE PATH HANDLING: [N findings] / [checked]\n"
-    "  ORPHANED ELEMENTS: [N findings] / [checked]\n"
-    "  FEEDBACK AND STATUS: [N findings] / [checked]\n"
-    "  FORM VALIDATION AND INPUT: [N findings] / [checked]\n"
-    "  UI/UX: [N findings] / [checked]\n"
-    "  ACCESSIBILITY: [N findings] / [checked]\n"
-    "  DESIGN CONSISTENCY: [N findings] / [checked]\n"
-    "  PERFORMANCE: [N findings] / [checked]\n"
-    "  ONBOARDING QUALITY: [N findings] / [checked]\n"
-    "  INFORMATION ARCHITECTURE: [N findings] / [checked]\n"
-    "  SECURITY AND TRUST: [N findings] / [checked]\n"
-    "  REDUNDANCY: [N findings] / [checked]\n"
-    "```\n"
-    "\n"
-    "═══════════════════════════════════════════════\n"
-    "AUDIT 3: INTERACTION TESTING\n"
-    "═══════════════════════════════════════════════\n"
-    "\n"
-    "For entities present on your assigned pages, test CRUD operations:\n"
-    "\n"
+    "FULL CRUD / INTERACTION PROTOCOL (when your slice owns an entity's actions):\n"
     + INTERACTION_TESTING_PROTOCOL + "\n"
     "\n"
-    "If a page does not contain entity CRUD (e.g., a static dashboard),\n"
-    "still test all interactive elements: buttons, links, cards, forms.\n"
+    "SHALLOW-BUG CHECKS (apply to EVERY row — these are the classes prior passes\n"
+    "missed: raw values/ids/enums shown to users, broken deep-links/email links,\n"
+    "toast-without-persistence, and missing CRUD; drive them with the adversarial\n"
+    "fixtures named in shared context, not friendly seed data):\n"
+    + SHALLOW_BUG_CHECKS + "\n"
     "\n"
-    "RECORDING FORMAT:\n"
+    "EXPERIENCE CHECKS (journeys, resilience, parity, empty-state coherence,\n"
+    "global affordances, viewports, auth edges — produce both bugs AND\n"
+    "improvement-opportunity findings):\n"
+    + EXPERIENCE_CHECKS + "\n"
     "\n"
-    + EVIDENCE_FORMAT + "\n"
+    "EXPECTED-FEATURE REFERENCE (for MISSING-FUNCTIONALITY rows):\n"
+    + SAAS_PAGE_STANDARDS + "\n"
     "\n"
-    "THOROUGHNESS RULES:\n"
-    "  - Do NOT skip small issues. Record EVERYTHING.\n"
-    "  - Do NOT self-censor findings you think might be intentional.\n"
-    "  - Take screenshots BEFORE and AFTER interactions.\n"
-    "  - If a page has multiple states, check EACH.\n"
-    "  - Test with different data: empty, minimal, special characters."
+    "AUTOMATION HYGIENE: browser flakiness (password-manager overlays intercepting\n"
+    "clicks, element ref churn after re-render, transient waits) is NOT an app\n"
+    "defect -- retry via refs/coordinates/JS and only record a FAIL when the APP\n"
+    "misbehaves. Take your time; correctness over speed."
 )
 
-# --- STEP 4: REPORT --------------------------------------------------------
 
-REPORT_INSTRUCTIONS = (
-    "REPORT - Compile findings with completion proof.\n"
+# ============================================================================
+# STEP 3: JUDGE
+# ============================================================================
+
+JUDGE_INSTRUCTIONS = (
+    "JUDGE - Turn observations into verdicts against the oracle.\n"
     "\n"
-    "OUTPUT FORMAT (REQUIRED):\n"
+    "For each assigned row, decide PASS or FAIL:\n"
+    "  - PASS: the app did what a correct app should (positive path worked and\n"
+    "    persisted; OR the negative input was properly rejected with a clear,\n"
+    "    field-adjacent message; OR the denied action was actually blocked).\n"
+    "  - FAIL: wrong data, silent failure, crash/white-screen, raw error, missing\n"
+    "    validation, missing feedback, broken authz, lost session on reload,\n"
+    "    missing expected feature, or any symptom in the categories below.\n"
+    "  - BLOCKED: you genuinely could not reach the action (missing prerequisite\n"
+    "    state, needs another role to act first) -- say exactly what is needed.\n"
+    "\n"
+    "Check every observation against these categories -- a thing can 'work' yet\n"
+    "still be wrong (wrong label, wrong count, no notification, poor a11y):\n"
+    + ISSUE_CATEGORIES + "\n"
+    "\n"
+    "For every FAIL, prepare a finding in this format:\n"
+    + EVIDENCE_FORMAT
+)
+
+
+# ============================================================================
+# STEP 4: RECORD
+# ============================================================================
+
+RECORD_INSTRUCTIONS = (
+    "RECORD - Persist verdicts to the shared ledger and findings files, then\n"
+    "return a coverage report to the orchestrator.\n"
+    "\n"
+    f"  1. Update `{LEDGER_DIR}/ledger.md`: for each of YOUR rows, set Status to\n"
+    "     PASS / FAIL / BLOCKED, add a one-line Verdict note, and link any Finding\n"
+    "     IDs. Edit only your own rows (avoid clobbering other agents' rows --\n"
+    "     change one row at a time by its unique ID).\n"
+    f"  2. Append each FAIL to `{LEDGER_DIR}/findings.md` with a NEW sequential ID\n"
+    "     (read the file first to find the highest existing Fxxx), the EVIDENCE\n"
+    "     format, and STATE=OPEN.\n"
+    f"  3. Append any newly-discovered actions to the ledger as UNTESTED rows.\n"
+    f"  4. Save key screenshots under `{LEDGER_DIR}/` and reference them by path.\n"
+    "\n"
+    "RETURN to the orchestrator (concise -- the files hold the detail):\n"
     "```\n"
-    "INSPECTION REPORT\n"
-    "Agent: [your agent description from launch prompt]\n"
-    "Pages inspected: [count]\n"
-    "\n"
-    "═══════════════════════════════════════════════\n"
-    "FINDINGS\n"
-    "═══════════════════════════════════════════════\n"
-    "\n"
-    "Finding 1:\n"
-    "  CATEGORY: [category]\n"
-    "  SEVERITY: [CRITICAL|HIGH|MEDIUM|LOW]\n"
-    "  PAGE: [route]\n"
-    "  ELEMENT: [specific element]\n"
-    "  OBSERVATION: [factual description]\n"
-    "  EVIDENCE: [screenshot ref or visual description]\n"
-    "  SUGGESTION: [improvement idea]\n"
-    "\n"
-    "[... repeat for all findings ...]\n"
-    "\n"
-    "═══════════════════════════════════════════════\n"
-    "COMPLETION CHECKLIST\n"
-    "═══════════════════════════════════════════════\n"
-    "\n"
-    "Page: [route 1]\n"
-    "  Standards audited:\n"
-    "    [x] NAVIGATION standards (all [N] items checked)\n"
-    "    [x] GENERAL standards (all [N] items checked)\n"
-    "    [x] [PAGE TYPE] standards (all [N] items checked)\n"
-    "  Categories audited:\n"
-    "    [x] BUGS\n"
-    "    [x] MISSING FUNCTIONALITY\n"
-    "    [x] NEGATIVE PATH HANDLING\n"
-    "    [x] ORPHANED ELEMENTS\n"
-    "    [x] FEEDBACK AND STATUS\n"
-    "    [x] FORM VALIDATION AND INPUT\n"
-    "    [x] UI/UX\n"
-    "    [x] ACCESSIBILITY\n"
-    "    [x] DESIGN CONSISTENCY\n"
-    "    [x] PERFORMANCE\n"
-    "    [x] ONBOARDING QUALITY\n"
-    "    [x] INFORMATION ARCHITECTURE\n"
-    "    [x] SECURITY AND TRUST\n"
-    "    [x] REDUNDANCY\n"
-    "  Interactions tested:\n"
-    "    [x] All buttons clicked\n"
-    "    [x] All links followed\n"
-    "    [x] CRUD tested for: [entity names or N/A]\n"
-    "    [x] Console/network checked\n"
-    "\n"
-    "[... repeat for each assigned page ...]\n"
-    "\n"
-    "ENTITY CRUD STATUS:\n"
-    "  [Entity Name]:\n"
-    "    CREATE: [TESTED/MISSING/N-A] - [notes]\n"
-    "    READ:   [TESTED/MISSING/N-A] - [notes]\n"
-    "    UPDATE: [TESTED/MISSING/N-A] - [notes]\n"
-    "    DELETE: [TESTED/MISSING/N-A] - [notes]\n"
-    "\n"
-    "Total findings: [N]\n"
-    "  CRITICAL: [N]\n"
-    "  HIGH: [N]\n"
-    "  MEDIUM: [N]\n"
-    "  LOW: [N]\n"
+    "TEST SLICE REPORT\n"
+    "  Rows assigned: [N]   PASS: [N]   FAIL: [N]   BLOCKED: [N]\n"
+    "  New findings: [F0xx..F0yy]\n"
+    "  New actions appended to ledger: [count + brief]\n"
+    "  Blocked rows + what they need: [list or none]\n"
     "```\n"
     "\n"
-    "IMPORTANT: The COMPLETION CHECKLIST is mandatory. It proves\n"
-    "that every standard and every category was checked for every page.\n"
-    "If any item is not checked, explain why.\n"
-    "\n"
-    "COMPLETE - Return inspection report to orchestrator."
+    "COMPLETE - return the slice report."
 )
 
 
@@ -292,47 +187,30 @@ REPORT_INSTRUCTIONS = (
 
 
 def build_next_command(step: int) -> str | None:
-    """Build invoke command for next step."""
     if step >= TOTAL_STEPS:
         return None
     return f"python3 -m {MODULE_PATH} --step {step + 1}"
 
 
-# ============================================================================
-# STEP DEFINITIONS
-# ============================================================================
-
 STATIC_STEPS = {
     1: ("Orient", ORIENT_INSTRUCTIONS),
-    2: ("Browse", BROWSE_INSTRUCTIONS),
-    3: ("Audit", AUDIT_INSTRUCTIONS),
-    4: ("Report", REPORT_INSTRUCTIONS),
+    2: ("Exercise", EXERCISE_INSTRUCTIONS),
+    3: ("Judge", JUDGE_INSTRUCTIONS),
+    4: ("Record", RECORD_INSTRUCTIONS),
 }
 
 
-# ============================================================================
-# OUTPUT FORMATTING
-# ============================================================================
-
-
 def format_output(step: int) -> str:
-    """Format output for given step."""
     if step not in STATIC_STEPS:
         return f"ERROR: Invalid step {step}"
-
     title, instructions = STATIC_STEPS[step]
     next_cmd = build_next_command(step)
-    return format_step(instructions, next_cmd or "", title=f"SITE REVIEW INSPECT - {title}")
-
-
-# ============================================================================
-# ENTRY POINT
-# ============================================================================
+    return format_step(instructions, next_cmd or "", title=f"SITE REVIEW TEST - {title}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Site Review Inspect - Deep per-page inspection agent",
+        description="Site Review Test - Executes a slice of ledger actions",
     )
     parser.add_argument("--step", type=int, required=True)
     args = parser.parse_args()
