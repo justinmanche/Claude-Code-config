@@ -72,8 +72,6 @@ SEVERITY ASSIGNMENT (per conventions/severity.md, impl-docs scope):
 
   MUST (blocks all iterations) - KNOWLEDGE categories:
     - IK_TRANSFER_FAILURE: invisible knowledge not at best location
-    - TEMPORAL_CONTAMINATION: change-relative language in comments
-    - BASELINE_REFERENCE: comment references removed code
 
   SHOULD (iterations 1-4):
     - CLAUDE.md format violations
@@ -82,7 +80,9 @@ SEVERITY ASSIGNMENT (per conventions/severity.md, impl-docs scope):
 
   COULD (iterations 1-3):
     - Minor formatting inconsistencies
-    - Documentation style variations"""
+    - Documentation style variations
+    - TEMPORAL_CONTAMINATION: change-relative language in comments
+    - BASELINE_REFERENCE: comment references removed code"""
 
 
 COMPONENT_EXAMPLES = """\

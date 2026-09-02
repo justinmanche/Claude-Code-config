@@ -93,8 +93,6 @@ CATEGORY_SEVERITY: dict[IssueCategory, Severity] = {
     IssueCategory.DECISION_LOG_MISSING: Severity.MUST,
     IssueCategory.POLICY_UNJUSTIFIED: Severity.MUST,
     IssueCategory.IK_TRANSFER_FAILURE: Severity.MUST,
-    IssueCategory.TEMPORAL_CONTAMINATION: Severity.MUST,
-    IssueCategory.BASELINE_REFERENCE: Severity.MUST,
     IssueCategory.ASSUMPTION_UNVALIDATED: Severity.MUST,
     IssueCategory.LLM_COMPREHENSION_RISK: Severity.MUST,
     IssueCategory.MARKER_INVALID: Severity.MUST,
@@ -109,6 +107,12 @@ CATEGORY_SEVERITY: dict[IssueCategory, Severity] = {
     IssueCategory.DEAD_CODE: Severity.COULD,
     IssueCategory.FORMATTER_FIXABLE: Severity.COULD,
     IssueCategory.MINOR_INCONSISTENCY: Severity.COULD,
+    # Comment-wording rules -> COULD. These are auto-fixable rewrites of
+    # comment phrasing, not knowledge loss; at MUST they drove roughly half
+    # of all QR failures and full fix->decompose->verify cycles. COULD still
+    # verifies them on iterations 1-2, then stops blocking.
+    IssueCategory.TEMPORAL_CONTAMINATION: Severity.COULD,
+    IssueCategory.BASELINE_REFERENCE: Severity.COULD,
     # JSON-IR STRUCTURE -> MUST
     IssueCategory.ORPHANED_CHANGE: Severity.MUST,
     IssueCategory.MISSING_CHANGE: Severity.MUST,

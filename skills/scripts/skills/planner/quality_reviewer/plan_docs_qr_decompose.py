@@ -9,9 +9,10 @@ NOT code correctness (plan-code's job).
 Severity categories (per conventions/severity.md):
   MUST: KNOWLEDGE categories only (TW can fix documentation issues)
     - DECISION_LOG_MISSING, IK_TRANSFER_FAILURE
-    - TEMPORAL_CONTAMINATION, BASELINE_REFERENCE
   SHOULD: Documentation structure gaps
-  COULD: Minor formatting inconsistencies
+  COULD: Minor formatting inconsistencies, comment wording
+    - TEMPORAL_CONTAMINATION, BASELINE_REFERENCE (auto-fixable rewrites;
+      demoted from MUST because they dominated QR fix loops)
 
 WHY KNOWLEDGE-only: TW agent cannot fix code correctness issues.
 Applying STRUCTURE categories generates unfixable items, causing QR loops.
@@ -94,7 +95,6 @@ SEVERITY ASSIGNMENT for plan-docs (doc_diff focused):
     - CODE_WITHOUT_DOCS: code_change has diff but no doc_diff
     - DECISION_UNCOVERED: DL-XXX not in any doc_diff
     - INVALID_DIFF_FORMAT: doc_diff not valid unified diff
-    - TEMPORAL_CONTAMINATION: change-relative language in doc_diff
 
   SHOULD (iterations 1-4):
     - WHY_NOT_WHAT: doc_diff comment describes code, not reasoning
@@ -102,6 +102,9 @@ SEVERITY ASSIGNMENT for plan-docs (doc_diff focused):
 
   COULD (iterations 1-3):
     - FORMATTING: minor diff formatting issues
+    - TEMPORAL_CONTAMINATION: change-relative language in doc_diff
+    - BASELINE_REFERENCE: doc_diff references removed/replaced code
+    - INTENT_LEAKAGE: 'intentionally', 'deliberately', 'chose' phrasing
 
 DO NOT generate items about:
   - diff field content (plan-code's job)

@@ -19,8 +19,6 @@ Knowledge loss is permanent. These ALWAYS block.
 | DECISION_LOG_MISSING   | Non-trivial choice without logged rationale |
 | POLICY_UNJUSTIFIED     | Policy default without Tier 1 backing       |
 | IK_TRANSFER_FAILURE    | Invisible knowledge not at BEST location    |
-| TEMPORAL_CONTAMINATION | Change-relative language in comments        |
-| BASELINE_REFERENCE     | Comment references removed/replaced code    |
 | ASSUMPTION_UNVALIDATED | Architectural assumption without citation   |
 | LLM_COMPREHENSION_RISK | Pattern that would confuse future LLM       |
 | MARKER_INVALID         | Intent marker without valid explanation     |
@@ -59,6 +57,11 @@ Auto-fixable, minimal impact.
 | DEAD_CODE           | Unused functions, impossible branches                      |
 | FORMATTER_FIXABLE   | Style issues fixable by formatter/linter                   |
 | MINOR_INCONSISTENCY | Non-conformance with no documented rule                    |
+| TEMPORAL_CONTAMINATION | Change-relative language in comments (see temporal.md). |
+|                     | A phrasing rewrite, not knowledge loss: kept at COULD so   |
+|                     | it is checked on iterations 1-2 but never blocks a plan    |
+|                     | indefinitely.                                              |
+| BASELINE_REFERENCE  | Comment references removed/replaced code. Same rationale.  |
 | TOOLCHAIN_CATCHABLE | Error in planned code that compiler/linter/interpreter     |
 |                     | would flag, where intended correct code is obvious from    |
 |                     | context (typos, missing imports, non-exhaustive match).    |
