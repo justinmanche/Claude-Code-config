@@ -162,6 +162,40 @@ def set_milestone(ctx: PlanContext, name: str = None, id: str = None,
         return {"id": mid, "version": 1, "operation": "created"}
 
 
+def _parse_list(value) -> list[str]:
+    """Accept a JSON list or a '||'-separated string.
+
+    WHY not _parse_csv: verification entries are sentences that routinely
+    contain commas ("as the vendor, open the request, see the title").
+    """
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return [v.strip() for v in str(value).split("||") if v.strip()]
+
+
+def set_verification(ctx: PlanContext, milestone: str, integration_tests=None,
+                     live_checks=None, version: int = None) -> dict:
+    """Set a milestone's real-dependency tests and deployed-system checks.
+
+    Replaces each provided list wholesale (omitted lists are unchanged).
+    """
+    plan = ctx.load_plan()
+    ms = plan.get_milestone(milestone)
+    if not ms:
+        ids = [m.id for m in plan.milestones]
+        raise ValueError(f"Milestone {milestone} not found. Valid: {ids}")
+    _check_version(ms, version, milestone)
+    if integration_tests is not None:
+        ms.integration_tests = _parse_list(integration_tests)
+    if live_checks is not None:
+        ms.live_checks = _parse_list(live_checks)
+    _bump_version(ms)
+    ctx.save_plan(plan)
+    return {"id": ms.id, "version": ms.version, "operation": "updated"}
+
+
 def set_intent(ctx: PlanContext, milestone: str, file: str = None,
                behavior: str = None, id: str = None, version: int = None,
                function: str = None, decision_refs: str = None) -> dict:

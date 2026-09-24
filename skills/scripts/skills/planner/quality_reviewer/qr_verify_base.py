@@ -174,7 +174,7 @@ class VerifyBase(ABC):
                 "",
                 "UNDERSTAND the checks you need to perform.",
                 "Note the scope: '*' means macro check, 'file:path:lines' means specific location.",
-                "Severity indicates blocking behavior: MUST blocks all iterations, SHOULD blocks 1-4.",
+                "Severity indicates blocking behavior: MUST blocks all iterations, SHOULD 1-3, COULD 1-2.",
             ],
             "next": f"python3 -m {module_path} --step 2{state_dir_arg} {item_flags}",
         }

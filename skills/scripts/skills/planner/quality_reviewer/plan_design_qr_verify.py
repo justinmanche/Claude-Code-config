@@ -8,7 +8,8 @@ Modes:
 - --qr-item: Single item verification (for parallel dispatch)
 - Default (legacy): Sequential 7-step full verification (deprecated)
 
-For decomposition (generating items), see plan_design_qr_decompose.py.
+Items and their first verdicts come from plan_design_review.py; this script
+re-verifies failed items (and the regression sweep) after a fix.
 """
 
 from skills.planner.shared.qr.utils import (

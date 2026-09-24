@@ -3,7 +3,7 @@
 
 4-step workflow for ONE developer sub-agent implementing ONE milestone:
   1. Locate Milestone (read assignment from plan.json)
-  2. Implement (apply the milestone's code_changes)
+  2. Implement (from the milestone's code_intents; there are no planned diffs)
   3. Verify (tests + acceptance criteria)
   4. Return (single-word contract)
 
@@ -52,9 +52,13 @@ def get_step_guidance(
                 "",
                 "UNDERSTAND before writing code:",
                 "  - files: what you may create/modify",
-                "  - code_intents + code_changes: planned diffs, comments, doc_diffs",
+                "  - code_intents: WHAT must change and why (decision_refs); YOU decide how",
                 "  - acceptance_criteria: what done means",
-                "  - tests: what must be written",
+                "  - tests: unit tests to write",
+                "  - integration_tests: tests against the REAL dependency (database with",
+                "    its access policies, etc.) -- required, not optional",
+                "  - live_checks: what will be verified on the deployed system later;",
+                "    make sure your change can actually produce that observation",
                 "  - constraints (planning_context): MUST/SHOULD/MUST-NOT",
             ],
             "next": f"python3 -m {MODULE_PATH} --step 2{state_dir_arg}",
@@ -66,10 +70,12 @@ def get_step_guidance(
             "actions": [
                 "IMPLEMENT the milestone.",
                 "",
-                "  - Apply each code_change: the planned diff is authoritative intent,",
-                "    but adapt line-level details to the actual current code.",
-                "  - Transcribe doc_diff content and WHY comments into the code.",
-                "  - Write the tests listed in the milestone.",
+                "  - Implement each code_intent against the ACTUAL current code. Before",
+                "    writing a query, read the migration that defines its tables/types;",
+                "    before a guarded route, read the permission it must check; before a",
+                "    cross-tenant read/write, check which identity it runs under.",
+                "  - Add a WHY comment where a decision (DL-xxx) is not obvious from code.",
+                "  - Write the unit tests AND the integration_tests listed in the milestone.",
                 "",
                 "SCOPE:",
                 "  - Touch ONLY this milestone's files (plus new test files).",
@@ -87,9 +93,11 @@ def get_step_guidance(
             "actions": [
                 "VERIFY your milestone.",
                 "",
-                "1. Run tests: pytest / tsc / go test -race",
-                "   Pass criteria: 100% tests pass, zero warnings.",
-                "2. Check EVERY acceptance criterion explicitly.",
+                "1. Run unit tests + typecheck for touched packages (commands in",
+                "   context.json verification_env). 100% pass, zero warnings.",
+                "2. Run this milestone's integration_tests against the real dependency.",
+                "   Start the dependency if needed. A mocked substitute does not count.",
+                "3. Check EVERY acceptance criterion explicitly.",
                 "",
                 "If tests or criteria fail: fix and re-verify. You ARE the",
                 "developer -- do not report failures you can fix yourself.",

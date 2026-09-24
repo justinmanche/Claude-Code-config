@@ -1,8 +1,8 @@
 """Quality reviewer modules."""
 
 # Export shared utilities from new location
-from .prompts.decompose import write_qr_state
+from .prompts.review import dispatch_review_step
 
 __all__ = [
-    "write_qr_state",
+    "dispatch_review_step",
 ]

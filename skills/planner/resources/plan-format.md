@@ -207,8 +207,10 @@ OR project docs prohibit tests for this component. State skip reason explicitly.
 
 **Code Intent** (you write this):
 
-Describe WHAT changes are needed. Do NOT include exact code or diffs.
-Do NOT read source files -- Developer handles that.
+Describe WHAT changes are needed, precisely enough to implement directly:
+there is no planned-diff phase. Do NOT write diffs, but DO read the code the
+intent touches and name the exact table/column/enum/permission/function, so
+the plan-design reviewer can check the intent against the real code.
 
 Include:
 - Functions/structs to add or modify (names, purposes)
@@ -223,28 +225,21 @@ Example:
 - Connection timeout: 500ms (Decision: "95th percentile latency coverage")
 ```
 
-**Code Changes** (filled by Developer agent):
+**Integration tests (real dependencies)** (you write this):
 
-After plan is written, spawn Developer to convert Code Intent to unified diffs.
-Developer reads actual files and produces accurate context lines.
-See `.claude/conventions/diff-format.md` for diff specification.
+Tests that run against the real dependency (database with its access
+policies, message broker, sandbox API), as the identity production uses.
+Required for any change to SQL, schema, access policies, tenant/ownership
+scope, or an action taken on behalf of another party.
 
-```diff
---- a/path/to/file.py
-+++ b/path/to/file.py
-@@ -123,6 +123,15 @@ def existing_function(ctx):
-   # Context lines (unchanged) serve as location anchors
-   existing_code()
+**Live checks** (you write this):
 
-+  # WHY comment explaining rationale - transcribed verbatim by Developer
-+  new_code()
-
-   # More context to anchor the insertion point
-   more_existing_code()
-```
+Observable, role-specific steps on the deployed system: "as <role>, do X,
+see Y". Required when a user can see or do anything differently. The
+executor ships once after all waves and verifies each check.
 
 Documentation-only milestones (ALL files are .md, .rst, .txt, or CLAUDE.md):
-- Code Intent/Changes section states: "Documentation milestone - no code changes."
+- Code Intent section states: "Documentation milestone - no code changes."
 - Milestone MUST have `Delegated to:` field (typically `@agent-technical-writer`)
 
 ### Milestone N: ...

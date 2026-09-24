@@ -21,7 +21,7 @@ def load_qr_state(state_dir: str, phase: str) -> dict | None:
 
     Args:
         state_dir: Path to state directory
-        phase: QR phase name (plan-design, plan-code, plan-docs, impl-code, impl-docs)
+        phase: QR phase name (plan-design, impl-code, impl-live, impl-docs)
 
     Returns:
         Parsed QR state dict or None if file doesn't exist/is invalid
@@ -84,7 +84,7 @@ ItemPredicate = Callable[[dict], bool]
 def by_status(*statuses: str) -> ItemPredicate:
     """Predicate factory: matches items whose status is in statuses.
 
-    Default "TODO" for missing status field because decompose creates
+    Default "TODO" for missing status field because derived items are created
     items without explicit status (TODO is the implicit initial state).
     """
     s = frozenset(statuses)
@@ -147,12 +147,21 @@ def format_qr_item_for_verification(item: dict) -> str:
         f"  <id>{item.get('id', QA_ITEM_DEFAULTS['id'])}</id>",
         f"  <scope>{item.get('scope', QA_ITEM_DEFAULTS['scope'])}</scope>",
         f"  <check>{item.get('check', QA_ITEM_DEFAULTS['check'])}</check>",
+    ]
+    if item.get("status") == "FAIL" and item.get("finding"):
+        # Re-verification after a fix: the verifier must confirm THIS defect
+        # is gone, not re-derive the check from scratch.
+        lines.append(f"  <previous_finding>{item['finding']}</previous_finding>")
+    lines.extend([
         "</qr_item_to_verify>",
         "",
         "VERIFY this specific item. Return exactly:",
         "  PASS - if check passes",
         "  FAIL - if check fails, with finding explaining why",
-    ]
+    ])
+    if item.get("status") == "FAIL":
+        lines.append("RE-VERIFICATION: PASS only if the previous finding is resolved in the")
+        lines.append("current code/artifact AND the check as a whole now holds.")
     return "\n".join(lines)
 
 
@@ -233,7 +242,7 @@ def get_qr_iteration(state_dir: str, phase: str) -> int:
 
     Args:
         state_dir: Path to state directory
-        phase: QR phase name (plan-design, plan-code, plan-docs, impl-code, impl-docs)
+        phase: QR phase name (plan-design, impl-code, impl-live, impl-docs)
 
     Returns:
         Current iteration (1 if file missing or no iteration field)
@@ -257,7 +266,7 @@ def has_qr_failures(state_dir: str, phase: str) -> bool:
 
     Args:
         state_dir: Path to state directory
-        phase: QR phase name (plan-design, plan-code, plan-docs, impl-code, impl-docs)
+        phase: QR phase name (plan-design, impl-code, impl-live, impl-docs)
 
     Returns:
         True if qr-{phase}.json has FAIL items at blocking severity
@@ -283,7 +292,7 @@ def qr_file_exists(state_dir: str, phase: str) -> bool:
 
     Args:
         state_dir: Path to state directory
-        phase: QR phase name (plan-design, plan-code, plan-docs, impl-code, impl-docs)
+        phase: QR phase name (plan-design, impl-code, impl-live, impl-docs)
 
     Returns:
         True if qr-{phase}.json exists, False otherwise
@@ -298,7 +307,7 @@ def increment_qr_iteration(state_dir: str, phase: str) -> int | None:
     """Increment iteration counter in qr-{phase}.json.
 
     WHY verify step owns iteration increment:
-    Iteration tracks verification cycles (decompose->verify->fix->verify),
+    Iteration tracks verification cycles (review->fix->reverify->fix...),
     not decomposition invocations. Decompose always writes iteration=1;
     verify increments on RETRY after fixes applied.
 
@@ -349,7 +358,7 @@ def get_pending_qr_items(state_dir: str, phase: str) -> list[str]:
 
     Args:
         state_dir: Path to state directory
-        phase: QR phase name (plan-design, plan-code, plan-docs, impl-code, impl-docs)
+        phase: QR phase name (plan-design, impl-code, impl-live, impl-docs)
 
     Returns:
         List of item IDs with TODO or FAIL status
@@ -364,3 +373,127 @@ def get_pending_qr_items(state_dir: str, phase: str) -> list[str]:
         if status in ("TODO", "FAIL"):
             pending.append(item.get("id", ""))
     return [id for id in pending if id]
+
+
+# =============================================================================
+# Lean review-loop state (single reviewer -> fix -> targeted re-verify)
+# =============================================================================
+
+def _write_qr_state_atomic(state_dir: str, phase: str, qr_state: dict) -> None:
+    """Atomic temp-file + rename write, same guarantee as increment_qr_iteration."""
+    import os
+    import tempfile
+
+    fd, tmp_path = tempfile.mkstemp(dir=state_dir, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as tmp:
+            json.dump(qr_state, tmp, indent=2)
+        os.rename(tmp_path, str(Path(state_dir) / f"qr-{phase}.json"))
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+
+def set_awaiting_reverify(state_dir: str, phase: str, value: bool) -> bool:
+    """Set qr-{phase}.json awaiting_reverify. Returns False if the file is missing.
+
+    WHY a flag: after the reviewer records verdicts and after a fixer runs, the
+    file looks the same (FAIL items present). The work step sets the flag when
+    it dispatches a fixer; the verify step clears it when it dispatches the
+    re-check. Without it the verify step cannot tell "route these FAILs to a
+    fixer" from "re-check these FAILs now that they are fixed".
+    """
+    qr_state = load_qr_state(state_dir, phase)
+    if qr_state is None:
+        return False
+    qr_state["awaiting_reverify"] = value
+    _write_qr_state_atomic(state_dir, phase, qr_state)
+    return True
+
+
+def set_qr_flag(state_dir: str, phase: str, key: str, value) -> bool:
+    """Set a top-level field in qr-{phase}.json atomically. False if no file."""
+    qr_state = load_qr_state(state_dir, phase)
+    if qr_state is None:
+        return False
+    qr_state[key] = value
+    _write_qr_state_atomic(state_dir, phase, qr_state)
+    return True
+
+
+def unresolved_items(state_dir: str, phase: str) -> list[dict]:
+    """Every item still FAIL, whatever its severity.
+
+    A gate can PASS with FAIL items left below the de-escalation threshold.
+    Callers record these before deleting the qr file so an accepted defect
+    is reported, not silently dropped.
+    """
+    qr_state = load_qr_state(state_dir, phase)
+    return get_qr_items_by_status(qr_state, "FAIL") if qr_state else []
+
+
+def is_awaiting_reverify(state_dir: str, phase: str) -> bool:
+    qr_state = load_qr_state(state_dir, phase)
+    return bool(qr_state and qr_state.get("awaiting_reverify"))
+
+
+def add_regression_item(state_dir: str, phase: str, check: str) -> str | None:
+    """Append a TODO regression-sweep item for the current iteration.
+
+    Returns the new item id (idempotent per iteration), or None if no file.
+    Severity SHOULD so progressive de-escalation stops it blocking from
+    iteration 4, matching every other structural item.
+    """
+    qr_state = load_qr_state(state_dir, phase)
+    if qr_state is None:
+        return None
+    iteration = qr_state.get("iteration", 1)
+    item_id = f"reg-{iteration:02d}"
+    if not any(i.get("id") == item_id for i in qr_state.get("items", [])):
+        qr_state.setdefault("items", []).append({
+            "id": item_id,
+            "scope": "*",
+            "check": check,
+            "status": "TODO",
+            "version": 1,
+            "severity": "SHOULD",
+        })
+        _write_qr_state_atomic(state_dir, phase, qr_state)
+    return item_id
+
+
+def blocking_failures(state_dir: str, phase: str) -> list[dict]:
+    """FAIL items at blocking severity for the file's current iteration."""
+    qr_state = load_qr_state(state_dir, phase)
+    if not qr_state:
+        return []
+    iteration = qr_state.get("iteration", 1)
+    return query_items(qr_state, by_status("FAIL"), by_blocking_severity(iteration))
+
+
+def write_live_items(state_dir: str, plan: dict) -> int:
+    """Create qr-impl-live.json from milestones[].live_checks. Returns item count.
+
+    Items are derived mechanically (no reviewer): the plan already states what
+    must be observed on the deployed system, and the plan-design review checked
+    those statements. Severity MUST: a user-visible failure blocks shipping.
+    """
+    items = []
+    for ms in plan.get("milestones", []):
+        for n, check in enumerate(ms.get("live_checks", []), 1):
+            items.append({
+                "id": f"live-{ms['id']}-{n}",
+                "scope": f"milestone:{ms['id']}",
+                "check": check,
+                "status": "TODO",
+                "version": 1,
+                "severity": "MUST",
+            })
+    # iteration 0 + awaiting_reverify: the shared re-verify step treats the
+    # first live round like a post-fix round (dispatch one checker) and
+    # increments to iteration 1, so fix rounds count from 2 as in every gate.
+    _write_qr_state_atomic(state_dir, "impl-live",
+                           {"phase": "impl-live", "iteration": 0,
+                            "awaiting_reverify": True, "items": items})
+    return len(items)

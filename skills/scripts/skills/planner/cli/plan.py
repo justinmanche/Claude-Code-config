@@ -357,6 +357,37 @@ class SetMilestoneCommand(Command):
             print_entity_result(EntityResult(id=mid, version=1, operation="created"))
 
 
+class SetVerificationCommand(Command):
+    name = "set-verification"
+    help = "Set a milestone's integration_tests and live_checks (repeatable flags)"
+    role = "architect"
+
+    @classmethod
+    def add_arguments(cls, p: argparse.ArgumentParser) -> None:
+        p.add_argument("--milestone", required=True, help="Milestone ID")
+        p.add_argument("--version", type=int, help="Current version (optional CAS check)")
+        p.add_argument("--integration-test", action="append", dest="integration_tests",
+                       help="Test that runs against the real dependency (repeatable)")
+        p.add_argument("--live-check", action="append", dest="live_checks",
+                       help="User-layer check on the deployed system (repeatable)")
+
+    @classmethod
+    def run(cls, args: argparse.Namespace) -> None:
+        from .plan_commands import PlanContext, set_verification
+        from pathlib import Path
+        ctx = PlanContext(state_dir=Path(get_state_dir()))
+        try:
+            result = set_verification(ctx, args.milestone,
+                                      integration_tests=args.integration_tests,
+                                      live_checks=args.live_checks,
+                                      version=args.version)
+        except ValueError as e:
+            error_exit(str(e))
+            return
+        print_entity_result(EntityResult(id=result["id"], version=result["version"],
+                                         operation="updated"))
+
+
 class SetIntentCommand(Command):
     name = "set-intent"
     help = "Create or update code intent"
@@ -1086,6 +1117,20 @@ def translate_to_markdown(plan: "Plan") -> str:
                 lines.append(f"- {t}")
             lines.append("")
 
+        if ms.integration_tests:
+            lines.append("**Integration tests (real dependencies)**:")
+            lines.append("")
+            for t in ms.integration_tests:
+                lines.append(f"- {t}")
+            lines.append("")
+
+        if ms.live_checks:
+            lines.append("**Live checks (deployed system, user layer)**:")
+            lines.append("")
+            for t in ms.live_checks:
+                lines.append(f"- {t}")
+            lines.append("")
+
         # Code Intent
         if ms.code_intents:
             lines.append("#### Code Intent")
@@ -1195,7 +1240,7 @@ class ValidateCommand(Command):
 
     @classmethod
     def add_arguments(cls, p: argparse.ArgumentParser) -> None:
-        p.add_argument("--phase", required=True, choices=["plan-design", "plan-code", "plan-docs"],
+        p.add_argument("--phase", required=True, choices=["plan-design"],
                       help="Phase to validate")
 
     @classmethod
@@ -1315,6 +1360,7 @@ class ListDecisionsCommand(Command):
 COMMANDS: list[type[Command]] = [
     InitCommand,
     SetMilestoneCommand,
+    SetVerificationCommand,
     SetIntentCommand,
     SetDecisionCommand,
     SetDiagramCommand,

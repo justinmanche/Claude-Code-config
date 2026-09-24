@@ -29,7 +29,8 @@ Failure to follow these patterns creates technical debt and inconsistency across
 | Directory             | What                                      | When to read                             |
 | --------------------- | ----------------------------------------- | ---------------------------------------- |
 | `scripts/`            | Python package root for all skill code    | Executing skills, debugging behavior     |
-| `planner/`            | Planning and execution workflows          | Creating implementation plans            |
+| `planner/`            | Lean planning and execution workflows (one reviewer per gate, integration + live gates) | Creating implementation plans            |
+| `planner-old/`        | Previous heavyweight planner (plan-code/plan-docs phases, parallel verify) | Only when explicitly asked for planner-old |
 | `refactor/`           | Refactoring analysis across dimensions    | Technical debt review, code quality      |
 | `problem-analysis/`   | Structured problem decomposition          | Understanding complex issues             |
 | `decision-critic/`    | Decision stress-testing and critique      | Validating architectural choices         |

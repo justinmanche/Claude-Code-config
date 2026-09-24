@@ -26,75 +26,76 @@ from __future__ import annotations
 # Values: dict with:
 #   workflow: "planner" or "executor"
 #   work_step: orchestrator step that dispatches work agent
-#   decompose_step: orchestrator step that dispatches QR decompose
-#   verify_step: orchestrator step that dispatches parallel verify agents
+#   review_step: orchestrator step that dispatches the single deep reviewer
+#   verify_step: orchestrator step that re-verifies failed items after a fix
+#                (one agent, failed items + a regression sweep)
 #   route_step: orchestrator step that routes based on QR result
 #   artifact: primary artifact being reviewed (relative to state_dir)
-#   decompose_script: Python module for decomposition
-#   verify_script: Python module for single-item verification
-#   decompose_steps: number of steps in decompose script
-#   verify_steps: number of steps in verify script
+#   review_script: Python module for the reviewer (None: items are derived)
+#   verify_script: Python module for item verification
+#   regression_check: check text added as a fresh item on every re-verify,
+#                     so a fix cannot silently break what it did not touch
 
 QR_PHASES: dict[str, dict] = {
     "plan-design": {
         "workflow": "planner",
         "work_step": 3,
-        "decompose_step": 4,
+        "review_step": 4,
         "verify_step": 5,
         "route_step": 6,
         "artifact": "plan.json",
-        "decompose_script": "skills.planner.quality_reviewer.plan_design_qr_decompose",
+        "review_script": "skills.planner.quality_reviewer.plan_design_review",
         "verify_script": "skills.planner.quality_reviewer.plan_design_qr_verify",
-        "decompose_steps": 13,
-        "verify_steps": 3,
-    },
-    "plan-code": {
-        "workflow": "planner",
-        "work_step": 7,
-        "decompose_step": 8,
-        "verify_step": 9,
-        "route_step": 10,
-        "artifact": "plan.json",
-        "decompose_script": "skills.planner.quality_reviewer.plan_code_qr_decompose",
-        "verify_script": "skills.planner.quality_reviewer.plan_code_qr_verify",
-        "decompose_steps": 13,
-        "verify_steps": 3,
-    },
-    "plan-docs": {
-        "workflow": "planner",
-        "work_step": 11,
-        "decompose_step": 12,
-        "verify_step": 13,
-        "route_step": 14,
-        "artifact": "plan.json",
-        "decompose_script": "skills.planner.quality_reviewer.plan_docs_qr_decompose",
-        "verify_script": "skills.planner.quality_reviewer.plan_docs_qr_verify",
-        "decompose_steps": 13,
-        "verify_steps": 3,
+        "regression_check": (
+            "REGRESSION SWEEP: the edits the architect made to plan.json in the last "
+            "fix round introduce no new contradiction -- with the codebase (re-read the "
+            "code each changed intent names), with other milestones, or with a decision."
+        ),
     },
     "impl-code": {
         "workflow": "executor",
         "work_step": 2,
-        "decompose_step": 3,
+        "review_step": 3,
         "verify_step": 4,
         "route_step": 5,
         "artifact": "plan.json",
-        "decompose_script": "skills.planner.quality_reviewer.impl_code_qr_decompose",
+        "review_script": "skills.planner.quality_reviewer.impl_code_review",
         "verify_script": "skills.planner.quality_reviewer.impl_code_qr_verify",
-        "decompose_steps": 13,
-        "verify_steps": 3,
+        "regression_check": (
+            "REGRESSION SWEEP: read `git diff` of the files the last fix round touched. "
+            "No new defect: callers still match changed signatures; SQL still names real "
+            "columns and types; no permission or tenant-scope check removed; no test "
+            "weakened, skipped or reshaped to pass; the milestone's integration_tests still run."
+        ),
+    },
+    "impl-live": {
+        "workflow": "executor",
+        "work_step": 8,
+        "review_step": None,  # items come from plan.json live_checks, not a reviewer
+        "verify_step": 6,
+        "route_step": 7,
+        "artifact": "plan.json",
+        "review_script": None,
+        "verify_script": "skills.planner.quality_reviewer.impl_live_verify",
+        "regression_check": (
+            "REGRESSION SWEEP: read `git diff` of the last live-fix round, then re-run on the "
+            "deployed system every user flow those files serve (not only the failed check). "
+            "None regressed."
+        ),
     },
     "impl-docs": {
         "workflow": "executor",
-        "work_step": 6,
-        "decompose_step": 7,
-        "verify_step": 8,
-        "route_step": 9,
+        "work_step": 9,
+        "review_step": 10,
+        "verify_step": 11,
+        "route_step": 12,
         "artifact": "plan.json",
-        "decompose_script": "skills.planner.quality_reviewer.impl_docs_qr_decompose",
+        "review_script": "skills.planner.quality_reviewer.impl_docs_review",
         "verify_script": "skills.planner.quality_reviewer.impl_docs_qr_verify",
-        "decompose_steps": 13,
-        "verify_steps": 3,
+        "regression_check": (
+            "REGRESSION SWEEP: the documentation edits of the last fix round are accurate "
+            "against the code and did not drop previously correct content."
+        ),
     },
 }
 
@@ -171,8 +172,8 @@ def get_route_step_info(phase: str) -> tuple[int, str, int]:
 
     # Total steps depends on workflow
     if workflow == "planner":
-        total_steps = 14
+        total_steps = 6
     else:  # executor
-        total_steps = 10
+        total_steps = 13
 
     return (config["route_step"], module_path, total_steps)

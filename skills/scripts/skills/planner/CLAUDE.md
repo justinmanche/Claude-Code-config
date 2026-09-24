@@ -1,43 +1,31 @@
-# planner/
+# planner/ (lean)
 
-Planning and execution workflows with QR gates, TW passes, and Dev execution. State files managed by LLM agents for session continuity.
+Planning and execution workflows: one deep review per gate, real-dependency
+integration tests, live verification. Design: `~/.claude/skills/planner/INTENT.md`.
 
 ## Files
 
-| File        | What                                                | When to read                                     |
-| ----------- | --------------------------------------------------- | ------------------------------------------------ |
-| `README.md` | Architecture, data flow, QR gates, design decisions | Understanding planner architecture, QR workflows |
-
-## Shared Files
-
-| File                    | What                                           | When to read                         |
-| ----------------------- | ---------------------------------------------- | ------------------------------------ |
-| `shared/schema.py`      | Pydantic schemas (context, plan, qr) and       | Understanding state file schemas,    |
-|                         | validate_state() function                      | modifying schema definitions         |
-| `shared/constraints.py` | Orchestrator constraint AST builders               | Building planner/executor prompts,   |
-|                         | (`build_orchestrator_constraint`,                  | composing reusable constraint blocks |
-|                         | `build_step_header`, `build_state_banner`)         |                                      |
-| `shared/gates.py`       | Unified gate output builder                    | Understanding QR gate logic,         |
-|                         | (`build_gate_output`)                          | modifying gate behavior              |
+| File        | What                                          | When to read                          |
+| ----------- | --------------------------------------------- | ------------------------------------- |
+| `README.md` | Module map and step-to-script wiring          | Finding which script a step runs      |
 
 ## Subdirectories
 
-| Directory           | What                                   | When to read                               |
-| ------------------- | -------------------------------------- | ------------------------------------------ |
-| `orchestrator/`     | Main workflows (planner, executor)     | Creating/executing plans                   |
-| `architect/`        | Plan design sub-agent                  | Understanding planning workflow            |
-| `developer/`        | Code filling and implementation        | Dev execution, diff creation               |
-| `technical_writer/` | Documentation scrubbing and generation | TW passes, temporal cleanup                |
-| `quality_reviewer/` | QR modules for all phases              | QR logic, validation, understanding gates  |
-| `shared/`           | Shared resources, schemas, conventions | Accessing conventions, resource management |
+| Directory           | What                                                        | When to read                          |
+| ------------------- | ----------------------------------------------------------- | ------------------------------------- |
+| `orchestrator/`     | planner.py (6 steps), executor.py (13 steps)                | Changing flow or step numbers         |
+| `architect/`        | plan-design work + fix scripts                              | Changing what plans contain           |
+| `developer/`        | milestone implementation, code fix, live fix                | Changing how code is written/fixed    |
+| `technical_writer/` | post-implementation docs work + fix                         | Changing documentation pass           |
+| `quality_reviewer/` | single-reviewer scripts, re-verify scripts, reconcile       | Changing what a gate checks           |
+| `shared/`           | schema, constants, gates, routing; `qr/` loop state + steps | Changing state files or gate mechanics|
+| `cli/`              | plan.json and qr-{phase}.json mutation CLIs                 | Adding plan fields or QR commands     |
 
 ## State Files
 
-All plan state lives in plan.json. Context captured separately in context.json. See README.md for full schemas.
-
-| File              | What                                    | Mutability          | When to read                   |
-| ----------------- | --------------------------------------- | ------------------- | ------------------------------ |
-| `plan.json`       | Complete plan state (milestones, diffs, | mutable -> frozen   | All planning phases            |
-|                   | code_intents, code_changes, docs)       |                     |                                |
-| `context.json`    | User-provided planning context          | frozen after step 2 | Sub-agent context handover     |
-| `qr-{phase}.json` | QA items for specific phase (ephemeral) | ephemeral           | QA decomposition, verification |
+| File              | What                                                   | Mutability          |
+| ----------------- | ------------------------------------------------------ | ------------------- |
+| `context.json`    | Planning context incl. `verification_env`              | frozen after step 2 |
+| `plan.json`       | Milestones, code_intents, decisions, waves, `integration_tests`, `live_checks` | mutable during planning |
+| `qr-{phase}.json` | Verdict items + `awaiting_reverify` per gate           | ephemeral           |
+| `exec-state.json` | Wave progress (executor Python only)                   | executor-owned      |

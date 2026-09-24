@@ -1,6 +1,6 @@
 ---
 name: planner
-description: Interactive planning and execution for complex tasks. IMMEDIATELY invoke when user asks to use planner.
+description: Interactive planning and execution for complex tasks, with one deep review per gate, real-dependency integration tests and live verification on the deployed system. IMMEDIATELY invoke when user asks to use planner.
 ---
 
 ## Activation
@@ -16,3 +16,6 @@ script IS the workflow.
 Execution step 1 needs the plan: pass `--plan <plan.md-or-plan.json>` (a .md
 needs its sibling .json), or `--state-dir <planner STATE_DIR>` from the same
 session. Add `--reconcile` when resuming work that may be partially complete.
+
+The previous, heavier workflow (plan-code and plan-docs review phases,
+parallel per-item verification) is still available as `planner-old`.

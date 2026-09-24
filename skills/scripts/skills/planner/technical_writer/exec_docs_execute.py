@@ -6,7 +6,7 @@
   2. Extract Plan Information (IK, modified files, milestones)
   3. CLAUDE.md Index Format (tabular format rules)
   4. README.md Creation (creation criteria, IK mapping)
-  5. Verify Transcribed Comments (spot-check comment transcription)
+  5. WHY Comments and Project Docs (spot-check decisions are explained)
   6. Output Format (documentation report)
 
 This is the EXECUTE script for first-time post-impl documentation.
@@ -22,7 +22,7 @@ STEPS = {
     2: "Extract Plan Information",
     3: "CLAUDE.md Index Format",
     4: "README.md Creation Criteria",
-    5: "Verify Transcribed Comments",
+    5: "WHY Comments and Project Docs",
     6: "Output Format",
 }
 
@@ -56,7 +56,7 @@ def get_step_guidance(
                 "DELIVERABLES:",
                 "  1. CLAUDE.md index entries for modified directories",
                 "  2. README.md if Invisible Knowledge has content",
-                "  3. Verification that TW-prepared comments were transcribed",
+                "  3. WHY comments present on non-obvious decisions; project docs current",
                 "",
                 "Read the plan file now to understand what was implemented.",
             ],
@@ -170,25 +170,19 @@ def get_step_guidance(
         return {
             "title": STEPS[5],
             "actions": [
-                "SPOT-CHECK that Developer transcribed TW-prepared comments.",
+                "SPOT-CHECK WHY comments on non-obvious code.",
                 "",
-                "Pick 2-3 modified files and verify:",
-                "  1. Comments from plan's Code Changes appear in actual files",
-                "  2. Comments are verbatim (not paraphrased)",
-                "  3. Comments are in correct locations",
+                "For each decision in plan.json planning_context.decisions that shaped",
+                "code (DL-xxx referenced by code_intents), find the code it governs:",
+                "  1. Is the WHY stated next to it (comment or docstring)?",
+                "  2. Does it explain why, not restate what the code does?",
+                "  3. No change-relative wording ('now', 'previously', 'replaced').",
                 "",
-                "COMMON TRANSCRIPTION ISSUES:",
-                "  - Comment missing entirely",
-                "  - Comment paraphrased (lost precision)",
-                "  - Comment in wrong location",
-                "  - Temporal contamination introduced (check 5 categories)",
+                "Also update project docs that describe changed behaviour",
+                "(context.json reference_docs: API contract, data model, permissions).",
                 "",
-                "If issues found:",
-                "  - Fix the comment in the actual source file",
-                "  - Use Edit tool on the source file (not plan file)",
-                "",
-                "This is verification, not comprehensive review.",
-                "QR already validated; spot-check for transcription accuracy.",
+                "If issues found: edit the source/doc file directly (Edit tool).",
+                "Never write docs into generated files; they are overwritten.",
             ],
             "next": f"python3 -m {MODULE_PATH} --step 6{state_dir_arg}",
         }

@@ -1,33 +1,33 @@
 #!/usr/bin/env python3
 """
-Plan Executor - 10-step execution orchestrator with parallel QR verification.
+Lean Plan Executor - 13-step execution orchestrator.
 
-Mirrors orchestrator/planner.py: every step prints a prompt and the exact
-command for the next step. Sub-agents run the scripts in developer/,
-technical_writer/ and quality_reviewer/; the orchestrator LLM only dispatches.
+Every step prints a prompt and the exact command for the next step.
+Sub-agents run the scripts in developer/, technical_writer/ and
+quality_reviewer/; the orchestrator LLM only dispatches (and ships, step 6).
 
 Flow (step numbers match shared/qr/phases.py and shared/constants.py):
-   1  exec-init               orchestrator  locate plan.json, build waves
-   2  impl-code-work          developer xN  one per milestone in current wave
-                                            (fix mode: one developer, via router)
-   3  impl-code-qr-decompose  QR (opus)     qr-impl-code.json
-   4  impl-code-qr-verify     QR xN         parallel item verification
-   5  impl-code-qr-route      orchestrator  FAIL -> 2 | PASS+more waves -> 2 | PASS -> 6
-   6  impl-docs-work          technical-writer
-   7  impl-docs-qr-decompose  QR (opus)     qr-impl-docs.json
-   8  impl-docs-qr-verify     QR xN
-   9  impl-docs-qr-route      orchestrator  FAIL -> 6 | PASS -> 10
-  10  retrospective           orchestrator  terminal
+   1  exec-init              orchestrator  locate plan.json, build waves
+   2  impl-code-work         developer xN  one per milestone in current wave,
+                                           then unit + integration gates
+                                           (fix mode: one developer, via router)
+   3  impl-code-review       QR (opus) x1  verdicts in qr-impl-code.json
+   4  impl-code-reverify     none | QR x1  re-check failed items after a fix
+   5  impl-code-route        orchestrator  FAIL -> 2 | PASS+more waves -> 2 | PASS -> 6
+   6  impl-live-verify       ship + QR x1  live_checks on the deployed system
+   7  impl-live-route        orchestrator  FAIL -> 8 | PASS -> 9
+   8  impl-live-fix          developer x1  reproduce, fix, add the missing test -> 6
+   9  impl-docs-work         technical-writer
+  10  impl-docs-review       QR (opus) x1
+  11  impl-docs-reverify     none | QR x1
+  12  impl-docs-route        orchestrator  FAIL -> 9 | PASS -> 13
+  13  retrospective          orchestrator  terminal
 
 Wave state lives in STATE_DIR/exec-state.json (Python-managed; the LLM never
-reads it). Code QR runs per wave so a broken foundation wave is caught before
-dependent waves build on it. Documentation runs once, after all waves, because
-exec_docs_execute.py documents finished implementation.
-
-Why docs are not per-wave (deviation from the original INTENT.md sketch):
-re-documenting after every wave re-does CLAUDE.md/README work N times for
-one final state. One TW pass over the completed implementation is cheaper
-and produces the same artifact.
+reads it). Code review runs per wave so a broken foundation wave is caught
+before dependent waves build on it. The live gate runs once, after all waves,
+against one deploy of the finished change. Documentation runs once, last, so
+it describes what actually shipped (including live fixes).
 """
 
 import argparse
@@ -43,19 +43,14 @@ from skills.lib.workflow.prompts.step import format_step
 from skills.planner.shared.qr.types import QRState, QRStatus, LoopState
 from skills.planner.shared.gates import build_gate_output, GateResult
 from skills.planner.shared.qr.cli import add_qr_args
+from skills.planner.shared.qr.loop import mark_fix_dispatched, review_step, reverify_step
 from skills.planner.shared.qr.utils import (
-    qr_file_exists,
-    increment_qr_iteration,
     get_qr_iteration,
     has_qr_failures,
-    load_qr_state,
-    query_items,
-    by_status,
-    by_blocking_severity,
+    qr_file_exists,
+    write_live_items,
 )
-from skills.planner.shared.qr.phases import get_phase_config
-from skills.planner.shared.resources import get_mode_script_path
-from skills.planner.shared.builders import THINKING_EFFICIENCY, format_forbidden
+from skills.planner.shared.builders import THINKING_EFFICIENCY
 from skills.planner.shared.constraints import (
     ORCHESTRATOR_CONSTRAINT_EXTENDED,
     format_state_banner,
@@ -69,6 +64,12 @@ from skills.planner.shared.constants import (
 
 MODULE_PATH = "skills.planner.orchestrator.executor"
 EXEC_STATE_FILE = "exec-state.json"
+
+STEP_CODE_WORK = 2
+STEP_LIVE_VERIFY = 6
+STEP_LIVE_FIX = 8
+STEP_DOCS_WORK = 9
+STEP_RETRO = 13
 
 
 # =============================================================================
@@ -207,8 +208,27 @@ def _ensure_context(state_dir: str, plan: dict) -> None:
 
 
 def _delete_qr_file(state_dir: str, phase: str) -> bool:
+    """Delete qr-{phase}.json, first recording any item still FAIL.
+
+    A gate passes with below-threshold FAIL items left in the file (severity
+    de-escalation), or with items the user accepted at escalation. They are
+    real, evidenced defects: copy them into exec-state.json known_issues so
+    the retrospective reports them instead of losing them with the file.
+    """
+    from skills.planner.shared.qr.utils import unresolved_items
     p = Path(state_dir) / f"qr-{phase}.json"
     if p.exists():
+        leftover = unresolved_items(state_dir, phase)
+        if leftover:
+            state = _load_exec_state(state_dir)
+            known = state.setdefault("known_issues", [])
+            for item in leftover:
+                entry = {"phase": phase, "id": item.get("id"),
+                         "severity": item.get("severity", "SHOULD"),
+                         "check": item.get("check", ""), "finding": item.get("finding", "")}
+                if entry not in known:
+                    known.append(entry)
+            _save_exec_state(state_dir, state)
         p.unlink()
         return True
     return False
@@ -293,9 +313,9 @@ def step_init(ctx: dict) -> dict:
             "title": "exec-init",
             "actions": [
                 "All milestones already completed (nothing pending).",
-                "Proceeding to documentation.",
+                "Proceeding to ship + live verification.",
             ],
-            "next": f"python3 -m {MODULE_PATH} --step 6 --state-dir {state_dir}",
+            "next": f"python3 -m {MODULE_PATH} --step {STEP_LIVE_VERIFY} --state-dir {state_dir}",
         }
 
     actions = [
@@ -306,8 +326,8 @@ def step_init(ctx: dict) -> dict:
         "WAVES (milestones in one wave run in parallel; waves run in order):",
         *_format_wave_table(state["waves"], plan, state["wave_index"]),
         "",
-        "WORKFLOW PER WAVE: developers -> tests -> Code QR -> route",
-        "After the last wave passes Code QR: documentation -> Doc QR -> retrospective.",
+        "WORKFLOW PER WAVE: developers -> unit + integration gates -> 1 reviewer -> route",
+        "After the last wave: ship -> live checks -> documentation -> 1 reviewer -> retrospective.",
         "",
         "This step is ANALYSIS ONLY. Set up TodoWrite tracking for the waves.",
         "Do NOT dispatch agents here.",
@@ -317,6 +337,16 @@ def step_init(ctx: dict) -> dict:
         "actions": actions,
         "next": f"python3 -m {MODULE_PATH} --step 2 --state-dir {state_dir}",
     }
+
+
+def _context(state_dir: str) -> dict:
+    p = Path(state_dir) / "context.json"
+    return json.loads(p.read_text()) if p.exists() else {}
+
+
+def _verification_env_lines(state_dir: str) -> list[str]:
+    env = _context(state_dir).get("verification_env") or []
+    return [f"  - {line}" for line in env] or ["  - (none recorded in context.json)"]
 
 
 def step_impl_code_work(ctx: dict) -> dict:
@@ -329,6 +359,7 @@ def step_impl_code_work(ctx: dict) -> dict:
 
     if qr.state == LoopState.RETRY:
         # Router (exec_implement.py) detects FAIL items and runs the fix script.
+        mark_fix_dispatched(state_dir, "impl-code")
         dispatch = subagent_dispatch(
             agent_type="developer",
             command=invoke_cmd,
@@ -339,14 +370,15 @@ def step_impl_code_work(ctx: dict) -> dict:
             "actions": [
                 format_state_banner("IMPLEMENTATION-FIX", qr.iteration, "fix"),
                 "",
-                "FIX MODE: Code QR found issues.",
+                "FIX MODE: Code review found issues.",
                 "",
                 ORCHESTRATOR_CONSTRAINT_EXTENDED,
                 "",
                 dispatch,
                 "",
                 "Developer reads qr-impl-code.json and fixes every FAIL item.",
-                "After fixes complete, QR re-verifies the failed items.",
+                "Then run the SAME gates as after a wave (below) before continuing.",
+                *_wave_gate_actions(state_dir, fix_mode=True),
             ],
             "next": f"python3 -m {MODULE_PATH} --step 3 --state-dir {state_dir}",
         }
@@ -356,8 +388,8 @@ def step_impl_code_work(ctx: dict) -> dict:
     if idx >= len(waves):
         return {
             "title": "impl-code-work",
-            "actions": ["No pending waves. Proceeding to documentation."],
-            "next": f"python3 -m {MODULE_PATH} --step 6 --state-dir {state_dir}",
+            "actions": ["No pending waves. Proceeding to live verification."],
+            "next": f"python3 -m {MODULE_PATH} --step {STEP_LIVE_VERIFY} --state-dir {state_dir}",
         }
 
     wave = waves[idx]
@@ -369,6 +401,7 @@ def step_impl_code_work(ctx: dict) -> dict:
             "name": m.get("name", ""),
             "files": ", ".join(m.get("files", [])) or "(see plan)",
             "criteria": "\n".join(f"  - {c}" for c in m.get("acceptance_criteria", [])) or "  - (see plan)",
+            "integration": "\n".join(f"  - {c}" for c in m.get("integration_tests", [])) or "  - (none planned)",
         })
 
     tmpl = (
@@ -376,6 +409,7 @@ def step_impl_code_work(ctx: dict) -> dict:
         f"PLAN_FILE: {state_dir}/plan.json\n"
         f"FILES: $files\n"
         f"ACCEPTANCE CRITERIA:\n$criteria\n"
+        f"INTEGRATION TESTS (real dependency, required):\n$integration\n"
         f"Implement ONLY this milestone. Other milestones in this wave run in parallel."
     )
     dispatch = template_dispatch(
@@ -394,154 +428,38 @@ def step_impl_code_work(ctx: dict) -> dict:
             dispatch,
             "",
             "AFTER ALL DEVELOPERS RETURN:",
-            "  1. Run the project's full test suite once (pytest / tsc / go test -race).",
-            "     Pass criteria: 100% tests pass, zero warnings.",
-            "  2. Tests fail -> dispatch a developer with the failure output (never fix yourself).",
-            "     Unclear cause -> dispatch debugger first.",
-            "  3. Tests pass -> next step (Code QR for this wave).",
+            *_wave_gate_actions(state_dir, fix_mode=False),
         ],
         "next": f"python3 -m {MODULE_PATH} --step 3 --state-dir {state_dir}",
     }
 
 
-def qr_decompose_step(title: str, phase: str, model: str | None = "opus"):
-    """Steps 3, 7: dispatch one QR agent to write qr-{phase}.json.
-
-    Runs once per QR cycle: if qr-{phase}.json already exists (fix loop),
-    decomposition is skipped and the existing items are re-verified.
-    """
-    def handler(ctx: dict) -> dict:
-        state_dir = ctx["state_dir"]
-        qr = ctx["qr"]
-        step = ctx["step"]
-
-        if qr_file_exists(state_dir, phase):
-            return {
-                "title": f"{title} - Skipped (items already defined)",
-                "actions": [
-                    f"QR items for {phase} already defined.",
-                    "Proceeding to verification of existing items.",
-                ],
-                "next": f"python3 -m {MODULE_PATH} --step {step + 1} --state-dir {state_dir}",
-            }
-
-        decompose_script = get_phase_config(phase)["decompose_script"]
-        dispatch = subagent_dispatch(
-            agent_type="quality-reviewer",
-            command=f"python3 -m {decompose_script} --step 1 --state-dir {state_dir}",
-            model=model,
-        )
-        return {
-            "title": title,
-            "actions": [
-                format_state_banner(f"QR-{phase.upper()}-DECOMPOSE", qr.iteration, "decompose"),
-                "",
-                ORCHESTRATOR_CONSTRAINT_EXTENDED,
-                "",
-                dispatch,
-                "",
-                f"Expected output: qr-{phase}.json written to STATE_DIR.",
-                "Orchestrator generates verification dispatch from this file.",
-            ],
-            "next": f"python3 -m {MODULE_PATH} --step {step + 1} --state-dir {state_dir}",
-        }
-
-    handler.phase = phase
-    return handler
+def _wave_gate_actions(state_dir: str, fix_mode: bool) -> list[str]:
+    """Local gates every wave (and every code fix) must pass before review."""
+    return [
+        "  GATES (run the commands from verification_env; one at a time):",
+        *_verification_env_lines(state_dir),
+        "  1. Unit tests + typecheck for every touched package.",
+        "  2. The wave's integration_tests against the REAL dependency (start it",
+        "     if needed). Mocked tests cannot see wrong columns, casts or access",
+        "     policies; these can. A missing or skipped integration test is a failure.",
+        "  3. Any failure -> dispatch a developer with the failure output",
+        "     (unclear cause -> dispatch debugger first). Never fix it yourself.",
+        "  4. All green -> invoke the next step" + (" (re-check)." if fix_mode else " (code review)."),
+    ]
 
 
-def _qr_item_flags(item_ids: list[str]) -> str:
-    return " ".join(f"--qr-item {i}" for i in item_ids)
-
-
-def qr_verify_step(title: str, phase: str):
-    """Steps 4, 8: parallel verification, one agent per item group."""
-    def handler(ctx: dict) -> dict:
-        state_dir = ctx["state_dir"]
-        qr = ctx["qr"]
-        step = ctx["step"]
-
-        qr_state = load_qr_state(state_dir, phase)
-        if not qr_state or "items" not in qr_state:
-            return {"error": f"qr-{phase}.json not found or malformed in {state_dir}"}
-
-        if qr.state == LoopState.RETRY:
-            increment_qr_iteration(state_dir, phase)
-
-        iteration = qr_state.get("iteration", 1)
-        items = query_items(qr_state, by_status("TODO", "FAIL"), by_blocking_severity(iteration))
-        base_cmd = f"python3 -m {MODULE_PATH} --step {step + 1} --state-dir {state_dir}"
-        if not items:
-            return {
-                "title": title,
-                "actions": ["All items already verified. Proceeding with pass."],
-                "if_pass": f"{base_cmd} --qr-status pass",
-                "if_fail": f"{base_cmd} --qr-status pass",
-            }
-
-        verify_script = get_phase_config(phase)["verify_script"]
-        groups: dict[str, list[dict]] = {}
-        for item in items:
-            groups.setdefault(item.get("group_id") or item["id"], []).append(item)
-
-        targets = [{
-            "group_id": gid,
-            "item_ids": ",".join(i["id"] for i in gi),
-            "qr_item_flags": _qr_item_flags([i["id"] for i in gi]),
-            "item_count": str(len(gi)),
-            "checks_summary": "; ".join(i.get("check", "")[:40] for i in gi[:3]),
-        } for gid, gi in groups.items()]
-
-        tmpl = (f"Verify QR group: $group_id ($item_count items)\n"
-                f"Items: $item_ids\n"
-                f"Checks: $checks_summary\n\n"
-                f"Start: python3 -m {verify_script} --step 1 --state-dir {state_dir} $qr_item_flags")
-        command = f"python3 -m {verify_script} --step 1 --state-dir {state_dir} $qr_item_flags"
-
-        dispatch = template_dispatch(
-            agent_type="quality-reviewer",
-            template=tmpl,
-            targets=targets,
-            command=command,
-            instruction=f"Verify {len(groups)} groups ({len(items)} items) in parallel.",
-        )
-
-        return {
-            "title": title,
-            "actions": [
-                ORCHESTRATOR_CONSTRAINT_EXTENDED,
-                "",
-                "=== PHASE 1: DISPATCH (delegate to sub-agents) ===",
-                "",
-                f"VERIFY: {len(items)} items",
-                "",
-                dispatch,
-                "",
-                "=== PHASE 2: AGGREGATE (your action after all agents return) ===",
-                "",
-                f"After ALL {len(groups)} agents return, tally results mechanically:",
-                "  ALL agents returned PASS  ->  invoke next step with --qr-status pass",
-                "  ANY agent returned FAIL   ->  invoke next step with --qr-status fail",
-                "",
-                format_forbidden(
-                    "Interpreting results beyond PASS/FAIL tallying",
-                    "Claiming 'diminishing returns' or 'comprehensive enough'",
-                    "Reading plan.json or any state files",
-                    "Fixing code yourself",
-                    "Skipping the next step command",
-                    "Proceeding to a later step without QR PASS",
-                ),
-            ],
-            "if_pass": f"{base_cmd} --qr-status pass",
-            "if_fail": f"{base_cmd} --qr-status fail",
-        }
-
-    handler.phase = phase
-    return handler
+def _wave_milestones_prompt(ctx: dict) -> str:
+    state = _load_exec_state(ctx["state_dir"])
+    waves = state.get("waves") or []
+    idx = state.get("wave_index", 0)
+    wave = waves[idx] if idx < len(waves) else []
+    return (f"PLAN_FILE: {ctx['state_dir']}/plan.json\n"
+            f"REVIEW WAVE MILESTONES: {', '.join(wave) or '(all)'}")
 
 
 def step_impl_code_route(ctx: dict) -> GateResult:
-    """Step 5: Code QR gate. PASS advances the wave; FAIL loops to step 2."""
+    """Step 5: code gate. PASS advances the wave; FAIL loops to step 2."""
     state_dir = ctx["state_dir"]
     qr = ctx["qr"]
     state = _load_exec_state(state_dir)
@@ -552,6 +470,8 @@ def step_impl_code_route(ctx: dict) -> GateResult:
         # Guard against a re-run of a passed gate: only advance when the QR
         # file is still present (deleted exactly once, here).
         if _delete_qr_file(state_dir, "impl-code") and idx < len(waves):
+            # Reload: _delete_qr_file may have recorded known_issues.
+            state = _load_exec_state(state_dir)
             for mid in waves[idx]:
                 if mid not in state["completed"]:
                     state["completed"].append(mid)
@@ -559,14 +479,13 @@ def step_impl_code_route(ctx: dict) -> GateResult:
             _save_exec_state(state_dir, state)
             idx += 1
 
-    more_waves = idx < len(waves)
-    if more_waves:
-        pass_step = 2
+    if idx < len(waves):
+        pass_step = STEP_CODE_WORK
         pass_message = (f"Wave {idx}/{len(waves)} verified. "
                         f"Proceed to step 2 (next wave: {', '.join(waves[idx])}).")
     else:
-        pass_step = 6
-        pass_message = "All waves verified. Proceed to step 6 (documentation)."
+        pass_step = STEP_LIVE_VERIFY
+        pass_message = "All waves verified. Proceed to step 6 (ship + live verification)."
 
     return build_gate_output(
         module_path=MODULE_PATH,
@@ -574,7 +493,7 @@ def step_impl_code_route(ctx: dict) -> GateResult:
         qr_name="impl-code-qr-route",
         qr=qr,
         step=ctx["step"],
-        work_step=2,
+        work_step=STEP_CODE_WORK,
         pass_step=pass_step,
         pass_message=pass_message,
         fix_target=AgentRole.DEVELOPER,
@@ -582,35 +501,128 @@ def step_impl_code_route(ctx: dict) -> GateResult:
     )
 
 
+def _ship_actions(ctx: dict) -> list[str]:
+    state_dir = ctx["state_dir"]
+    return [
+        "SHIP FIRST (the one exception to delegate-only: run it yourself via Bash):",
+        *_verification_env_lines(state_dir),
+        "  - Run the ship command from verification_env; capture output to a log",
+        "    file and the exit code (never pipe through tail/head, it hides failures).",
+        "  - Confirm the deployed build is the one you just built (health/version).",
+        "  - Ship fails -> dispatch debugger with the log; do not verify an old build.",
+        "",
+    ]
+
+
+def step_impl_live_verify(ctx: dict) -> dict:
+    """Step 6: ship, then one agent verifies live checks on the deployed system."""
+    state_dir = ctx["state_dir"]
+    step = ctx["step"]
+    plan = _load_plan(state_dir)
+
+    if not qr_file_exists(state_dir, "impl-live"):
+        count = write_live_items(state_dir, plan)
+        if count == 0:
+            _delete_qr_file(state_dir, "impl-live")
+            return {
+                "title": "impl-live-verify - Skipped",
+                "actions": [
+                    "No milestone declares live_checks: nothing to verify on a deployed system.",
+                    "Record this in the retrospective (Verification Gaps).",
+                ],
+                "next": f"python3 -m {MODULE_PATH} --step {STEP_DOCS_WORK} --state-dir {state_dir}",
+            }
+
+    return _live_reverify(ctx)
+
+
+def _live_prestep(ctx: dict) -> list[str]:
+    return _ship_actions(ctx)
+
+
+_live_reverify = reverify_step(MODULE_PATH, "impl-live-verify", "impl-live",
+                               pre_actions=_live_prestep)
+
+
+def step_impl_live_route(ctx: dict) -> GateResult:
+    """Step 7: live gate. PASS -> docs; FAIL -> live fix (8)."""
+    state_dir = ctx["state_dir"]
+    qr = ctx["qr"]
+    if qr.passed:
+        _delete_qr_file(state_dir, "impl-live")
+    return build_gate_output(
+        module_path=MODULE_PATH,
+        script_name="executor",
+        qr_name="impl-live-qr-route",
+        qr=qr,
+        step=ctx["step"],
+        work_step=STEP_LIVE_FIX,
+        pass_step=STEP_DOCS_WORK,
+        pass_message="Live checks verified on the deployed system. Proceed to step 9 (documentation).",
+        fix_target=AgentRole.DEVELOPER,
+        state_dir=state_dir,
+    )
+
+
+def step_impl_live_fix(ctx: dict) -> dict:
+    """Step 8: one developer reproduces and fixes live failures, then back to 6."""
+    state_dir = ctx["state_dir"]
+    qr = ctx["qr"]
+    mark_fix_dispatched(state_dir, "impl-live")
+    dispatch = subagent_dispatch(
+        agent_type="developer",
+        command=f"python3 -m skills.planner.developer.exec_live_fix --step 1 --state-dir {state_dir}",
+        prompt=f"PLAN_FILE: {state_dir}/plan.json\nFIX MODE: qr-impl-live.json has FAIL items.",
+    )
+    return {
+        "title": "impl-live-fix",
+        "actions": [
+            format_state_banner("LIVE-FIX", qr.iteration, "fix"),
+            "",
+            ORCHESTRATOR_CONSTRAINT_EXTENDED,
+            "",
+            dispatch,
+            "",
+            "Developer returns PASS, or FAIL: ENVIRONMENT/<reason>.",
+            "  FAIL: ENVIRONMENT -> fix the environment with the user (AskUserQuestion),",
+            "                       then continue; do not change code for it.",
+            "  PASS -> invoke the next step: it redeploys and re-checks the failed",
+            "          items plus a regression sweep of the fix.",
+        ],
+        "next": f"python3 -m {MODULE_PATH} --step {STEP_LIVE_VERIFY} --state-dir {state_dir}",
+    }
+
+
 def step_impl_docs_work(ctx: dict) -> dict:
-    """Step 6: technical writer documents the finished implementation."""
+    """Step 9: technical writer documents the finished, live-verified change."""
     state_dir = ctx["state_dir"]
     qr = ctx["qr"]
     state = _load_exec_state(state_dir)
     invoke_cmd = f"python3 -m skills.planner.technical_writer.exec_docs --step 1 --state-dir {state_dir}"
 
     if qr.state == LoopState.RETRY:
+        mark_fix_dispatched(state_dir, "impl-docs")
         banner = [format_state_banner("DOCUMENTATION-FIX", qr.iteration, "fix"), "",
-                  "FIX MODE: Doc QR found issues.", ""]
+                  "FIX MODE: Doc review found issues.", ""]
         prompt = f"PLAN_FILE: {state_dir}/plan.json\nFIX MODE: qr-impl-docs.json has FAIL items."
         title = "impl-docs-work - Fix Mode"
     else:
         banner = []
         prompt = (f"PLAN_FILE: {state_dir}/plan.json\n"
                   f"IMPLEMENTED MILESTONES: {', '.join(state.get('completed', [])) or '(see plan)'}\n"
-                  f"Implementation is complete and Code QR has passed.")
+                  f"Implementation is complete, code review passed, live checks passed.")
         title = "impl-docs-work"
 
     dispatch = subagent_dispatch(agent_type="technical-writer", command=invoke_cmd, prompt=prompt)
     return {
         "title": title,
         "actions": [*banner, ORCHESTRATOR_CONSTRAINT_EXTENDED, "", dispatch],
-        "next": f"python3 -m {MODULE_PATH} --step 7 --state-dir {state_dir}",
+        "next": f"python3 -m {MODULE_PATH} --step 10 --state-dir {state_dir}",
     }
 
 
 def step_impl_docs_route(ctx: dict) -> GateResult:
-    """Step 9: Doc QR gate. PASS -> retrospective; FAIL -> step 6."""
+    """Step 12: doc gate. PASS -> retrospective; FAIL -> step 9."""
     state_dir = ctx["state_dir"]
     qr = ctx["qr"]
     if qr.passed:
@@ -621,16 +633,29 @@ def step_impl_docs_route(ctx: dict) -> GateResult:
         qr_name="impl-docs-qr-route",
         qr=qr,
         step=ctx["step"],
-        work_step=6,
-        pass_step=10,
-        pass_message="Documentation verified. Proceed to step 10 (retrospective).",
+        work_step=STEP_DOCS_WORK,
+        pass_step=STEP_RETRO,
+        pass_message="Documentation verified. Proceed to step 13 (retrospective).",
         fix_target=AgentRole.TECHNICAL_WRITER,
         state_dir=state_dir,
     )
 
 
+def _known_issue_lines(state: dict) -> list[str]:
+    known = state.get("known_issues") or []
+    if not known:
+        return ["Accepted Known Issues: none"]
+    lines = [f"Accepted Known Issues ({len(known)}) -- gates passed with these still FAIL;",
+             "  list EVERY one to the user with its finding:"]
+    for k in known:
+        lines.append(f"  [{k['phase']} {k['id']} {k['severity']}] {k['check']}")
+        if k.get("finding"):
+            lines.append(f"      {k['finding']}")
+    return lines
+
+
 def step_retrospective(ctx: dict) -> dict:
-    """Step 10: terminal. Present execution summary to the user."""
+    """Step 13: terminal. Present execution summary to the user."""
     state_dir = ctx["state_dir"]
     state = _load_exec_state(state_dir)
     return {
@@ -647,10 +672,13 @@ def step_retrospective(ctx: dict) -> dict:
             "Status: COMPLETED | BLOCKED | ABORTED",
             "",
             "Milestone Outcomes: | Milestone | Status | Notes |",
-            "Reconciliation Summary: [if run]",
-            "Plan Accuracy Issues: [if any]",
             "Deviations from Plan: [if any]",
-            "Quality Review Summary: [counts by category, iterations per phase]",
+            "Defects Caught, by gate: plan review | code review (per wave) |",
+            "  integration tests | live checks -- one line each, with what escaped",
+            "  to a later gate and why the earlier one could not see it",
+            "Verification Gaps: [milestones without integration_tests/live_checks]",
+            *_known_issue_lines(state),
+            "Review Iterations: [per gate]",
             "Feedback for Future Plans: [actionable suggestions]",
         ],
         "next": "",
@@ -664,20 +692,25 @@ def step_retrospective(ctx: dict) -> dict:
 STEPS = {
     1: step_init,
     2: step_impl_code_work,
-    3: qr_decompose_step("impl-code-qr-decompose", "impl-code"),
-    4: qr_verify_step("impl-code-qr-verify", "impl-code"),
+    3: review_step(MODULE_PATH, "impl-code-review", "impl-code", model="opus",
+                   extra_prompt=_wave_milestones_prompt),
+    4: reverify_step(MODULE_PATH, "impl-code-reverify", "impl-code"),
     5: step_impl_code_route,
-    6: step_impl_docs_work,
-    7: qr_decompose_step("impl-docs-qr-decompose", "impl-docs"),
-    8: qr_verify_step("impl-docs-qr-verify", "impl-docs"),
-    9: step_impl_docs_route,
-    10: step_retrospective,
+    6: step_impl_live_verify,
+    7: step_impl_live_route,
+    8: step_impl_live_fix,
+    9: step_impl_docs_work,
+    10: review_step(MODULE_PATH, "impl-docs-review", "impl-docs", model="opus"),
+    11: reverify_step(MODULE_PATH, "impl-docs-reverify", "impl-docs"),
+    12: step_impl_docs_route,
+    13: step_retrospective,
 }
 validate_step_count(STEPS, EXECUTOR_TOTAL_STEPS, "executor")
 
 # Phase for QR-state detection (fix mode / iteration) per step.
 STEP_PHASE = {2: "impl-code", 3: "impl-code", 4: "impl-code", 5: "impl-code",
-              6: "impl-docs", 7: "impl-docs", 8: "impl-docs", 9: "impl-docs"}
+              6: "impl-live", 7: "impl-live", 8: "impl-live",
+              9: "impl-docs", 10: "impl-docs", 11: "impl-docs", 12: "impl-docs"}
 
 
 def get_step_guidance(step: int, args) -> dict | GateResult:
@@ -694,7 +727,7 @@ def get_step_guidance(step: int, args) -> dict | GateResult:
         state=LoopState.RETRY if is_fix_mode else LoopState.INITIAL,
         status=QRStatus(args.qr_status) if args.qr_status else None,
     )
-    return handler({"step": step, "qr": qr, "state_dir": state_dir, "args": args})
+    return handler({"step": step, "qr": qr, "state_dir": state_dir, "args": args, "phase": phase})
 
 
 def format_output(step: int, args) -> str | GateResult:
@@ -716,8 +749,8 @@ def format_output(step: int, args) -> str | GateResult:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Plan Executor (10-step orchestration workflow)",
-        epilog="Step 1: init (needs --plan or --state-dir) | 2-5: code per wave | 6-9: docs | 10: retrospective",
+        description="Lean Plan Executor (13-step orchestration workflow)",
+        epilog="1: init | 2-5: code per wave | 6-8: ship + live | 9-12: docs | 13: retrospective",
     )
     parser.add_argument("--step", type=int, required=True)
     parser.add_argument("--state-dir", type=str, default=None,
@@ -747,7 +780,7 @@ def main():
         print(f"EXECUTOR - Step {args.step}/{EXECUTOR_TOTAL_STEPS}: route step")
         print()
         print("Re-invoke with --qr-status pass or --qr-status fail")
-        print("based on the aggregated QR output from the previous step.")
+        print("based on the previous step's output.")
         sys.exit(0)
 
     result = format_output(args.step, args)

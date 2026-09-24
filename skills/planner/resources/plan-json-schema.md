@@ -133,21 +133,18 @@ Knowledge that should transfer to future LLM sessions.
   "requirements": ["Limit to 100 requests per minute per client"],
   "acceptance_criteria": ["Test demonstrates rate limiting behavior"],
 
-  "tests": {
-    "files": ["tests/test_ratelimit.py"],
-    "type": "unit|integration|property-based",
-    "backing": "user-specified|doc-derived|default-derived",
-    "scenarios": {
-      "normal": ["Under limit requests succeed"],
-      "edge": ["Exactly at limit"],
-      "error": ["Over limit returns 429"]
-    },
-    "skip_reason": null
-  },
+  "tests": [
+    "unit: under limit requests succeed",
+    "unit: exactly at limit is allowed; one over returns 429"
+  ],
+  "integration_tests": [
+    "against the real Redis: two app instances share one client's window"
+  ],
+  "live_checks": [
+    "as an API client on the deployed service, the 101st request in a minute returns 429 with Retry-After"
+  ],
 
   "code_intents": [...],
-  "code_changes": [...],
-  "documentation": {...},
 
   "is_documentation_only": false,
   "delegated_to": null
@@ -181,66 +178,24 @@ ID format: `CI-{milestone_id}-###`
 
 ---
 
-## Code Change
+## Verification fields
 
-Developer populates. Implements a Code Intent.
+Set with `set-verification` (repeatable `--integration-test` / `--live-check`,
+or JSON lists in batch mode).
 
-```json
-{
-  "id": "CC-M-001-001",
-  "intent_ref": "CI-M-001-001",
-  "file": "src/ratelimit.py",
-  "diff": "--- a/src/ratelimit.py\n+++ b/src/ratelimit.py\n@@ -1,0 +1,15 @@\n+def check_rate_limit(client_id: str) -> bool:\n+    ...",
-  "context_lines": {
-    "before": ["import time", "from collections import defaultdict"],
-    "after": ["class RateLimitError(Exception):"]
-  },
-  "why_comments": [
-    {
-      "line_offset": 5,
-      "comment": "Sliding window chosen over fixed window to prevent burst at window boundary",
-      "decision_ref": "DL-001"
-    }
-  ]
-}
-```
+- `tests`: unit scenarios. Free-form strings.
+- `integration_tests`: tests against the REAL dependency, run as the identity
+  production uses. Required when a milestone touches SQL, schema, access
+  policies, tenant/ownership scope, or acts on behalf of another party.
+  These catch what mocked unit tests cannot: wrong column names, missing
+  casts, enum/text comparisons, row-level-security denials.
+- `live_checks`: observable, role-specific steps on the deployed system
+  ("as <role>, do X, see Y"). Required when a user can see or do anything
+  differently. The executor turns each into one item of qr-impl-live.json.
 
-ID format: `CC-{milestone_id}-###`
-
-CRITICAL: `intent_ref` MUST reference existing `code_intent.id`
-
----
-
-## Documentation
-
-TW populates after code changes.
-
-```json
-{
-  "module_comment": "Rate limiting module using sliding window algorithm...",
-  "docstrings": [
-    {
-      "function": "check_rate_limit",
-      "docstring": "Check if request from client_id is within rate limit.\n\nArgs:\n    client_id: Unique client identifier\n\nReturns:\n    True if allowed, False if rate limited"
-    }
-  ],
-  "function_blocks": [
-    {
-      "function": "check_rate_limit",
-      "comment": "Sliding window implementation:\n1. Get current timestamp\n2. Remove expired entries\n3. Count remaining entries\n4. Return count < limit",
-      "decision_ref": null,
-      "source": null
-    }
-  ],
-  "inline_comments": [
-    {
-      "location": "check_rate_limit:15",
-      "comment": "Atomic increment to handle concurrent requests",
-      "decision_ref": "DL-003"
-    }
-  ]
-}
-```
+There are no `code_changes` (planned diffs) or planned `documentation` in the
+lean planner: developers implement from `code_intents`, and documentation is
+written once, after implementation (executor steps 9-12).
 
 ---
 
@@ -263,8 +218,8 @@ TW populates after code changes.
 
 ### Reference Integrity
 
-1. `code_change.intent_ref` must point to existing `code_intent.id` in same milestone
-2. `why_comment.decision_ref` must point to existing `decision_log.id`
+1. `code_intent.decision_refs[]` entries must exist (below)
+2. `inline_comment.decision_ref` must point to existing `decision_log.id`
 3. `code_intent.decision_refs[]` must point to existing `decision_log.id`
 4. `rejected_alternative.decision_ref` must point to existing `decision_log.id`
 5. `known_risk.decision_ref` must point to existing `decision_log.id`
@@ -272,20 +227,14 @@ TW populates after code changes.
 
 ### Phase Completeness
 
-**plan-design** (Architect):
+**plan-design** (Architect) -- the only planning phase:
 
-- `overview.title` required
 - `overview.problem` required
 - At least one milestone
-- Each milestone has at least one `code_intent`
-
-**plan-code** (Developer):
-
-- Every `code_intent` has matching `code_change` with valid `intent_ref`
-
-**plan-docs** (TW):
-
-- Documentation populated where needed
+- Each milestone (unless documentation-only) has at least one `code_intent`
+- Each milestone has `acceptance_criteria`
+- Verification coverage (integration_tests / live_checks) is judged by the
+  plan-design reviewer, not by the validator
 
 ---
 

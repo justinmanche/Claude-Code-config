@@ -63,6 +63,10 @@ if PYDANTIC_AVAILABLE:
         assumptions: list[str]
         invisible_knowledge: list[str]
         reference_docs: list[str]
+        # How the project proves a change works at each layer: unit command,
+        # real-dependency integration command, ship command, live check method.
+        # Optional so a context.json written by planner-old still validates.
+        verification_env: list[str] = Field(default_factory=list)
 
 
 # =============================================================================
@@ -214,6 +218,13 @@ if PYDANTIC_AVAILABLE:
         requirements: list[str] = Field(default_factory=list)
         acceptance_criteria: list[str] = Field(default_factory=list)
         tests: list[str] = Field(default_factory=list)  # Free-form test descriptions
+        # Tests that run against the real dependency (database, policy engine,
+        # external API sandbox). Mocked unit tests cannot see wrong column names,
+        # type mismatches or row-level-security denials; these can.
+        integration_tests: list[str] = Field(default_factory=list)
+        # User-layer checks run against the deployed system after the code gates
+        # pass; each becomes one item in qr-impl-live.json.
+        live_checks: list[str] = Field(default_factory=list)
         code_intents: list[CodeIntent] = Field(default_factory=list)
         code_changes: list[CodeChange] = Field(default_factory=list)
         documentation: Documentation = Field(default_factory=Documentation)
@@ -352,36 +363,10 @@ if PYDANTIC_AVAILABLE:
                 if not self.milestones:
                     errors.append("at least one milestone required")
                 for ms in self.milestones:
-                    if not ms.code_intents:
+                    if not ms.code_intents and not ms.is_documentation_only:
                         errors.append(f"milestone {ms.id} needs at least one code_intent")
-            elif phase == "plan-code":
-                for ms in self.milestones:
-                    intent_ids = {ci.id for ci in ms.code_intents}
-                    change_refs = {cc.intent_ref for cc in ms.code_changes}
-                    missing = intent_ids - change_refs
-                    if missing:
-                        errors.append(
-                            f"milestone {ms.id} missing code_changes for: "
-                            f"{', '.join(sorted(missing))}"
-                        )
-            elif phase == "plan-docs":
-                for ms in self.milestones:
-                    for cc in ms.code_changes:
-                        # Every code_change with diff should have doc_diff
-                        if cc.diff and not cc.doc_diff:
-                            errors.append(
-                                f"{cc.id}: has code diff but no doc_diff"
-                            )
-                        # doc_diff must be valid unified diff format if present
-                        if cc.doc_diff and not cc.doc_diff.strip().startswith(('---', '@@', 'diff')):
-                            errors.append(
-                                f"{cc.id}: doc_diff must be valid unified diff format"
-                            )
-                        # At least one must be non-empty
-                        if not cc.diff and not cc.doc_diff:
-                            errors.append(
-                                f"{cc.id}: must have diff or doc_diff (both empty)"
-                            )
+                    if not ms.acceptance_criteria:
+                        errors.append(f"milestone {ms.id} needs acceptance_criteria")
             return errors
 
 
@@ -406,6 +391,13 @@ if PYDANTIC_AVAILABLE:
         """qr-{phase}.json file structure."""
         phase: str
         iteration: int = 1
+        # True between a fix dispatch and the re-verification of that fix.
+        # Distinguishes "reviewer just recorded FAILs" (route them to a fixer)
+        # from "fixer just ran" (re-check the FAILs) -- both states have FAIL items.
+        awaiting_reverify: bool = False
+        # Set when the iteration limit escalated to the user; lets exactly one
+        # user-approved re-check run before the next escalation.
+        extra_round: bool = False
         items: list[QRItem] = Field(default_factory=list)
 
 
