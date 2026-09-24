@@ -163,6 +163,13 @@ def _resolve_state_dir(state_dir: str | None, plan: str | None) -> str:
     shutil.copy(plan_json, _plan_path(new_dir))
     if src.suffix != ".json":
         shutil.copy(src, Path(new_dir) / "plan.md")
+    # The planner's handoff saves context.json as <name>.context.json next to
+    # the plan; it carries verification_env, which a synthesized context lacks.
+    for ctx_file in (plan_json.with_name(plan_json.stem + ".context.json"),
+                     plan_json.parent / "context.json"):
+        if ctx_file.exists():
+            shutil.copy(ctx_file, Path(new_dir) / "context.json")
+            break
     return new_dir
 
 
@@ -203,6 +210,8 @@ def _ensure_context(state_dir: str, plan: dict) -> None:
         "assumptions": ["none"],
         "invisible_knowledge": ik_lines or [],
         "reference_docs": ["none"],
+        "verification_env": ["none recorded: planner context.json was not saved with the plan; "
+                             "ask the user for unit, integration, ship and live-check commands"],
     }
     path.write_text(json.dumps(context, indent=2))
 

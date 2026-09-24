@@ -29,7 +29,7 @@ fix routers -- with the gates rebuilt around what measurably catches defects.
 | 3 plan-design-work | architect | milestones, code_intents, decisions, waves, **integration_tests**, **live_checks** |
 | 4 plan-design-review | 1 quality-reviewer (opus) | qr-plan-design.json with a verdict per item, intents checked against the real code |
 | 5 plan-design-reverify | none, or 1 quality-reviewer after a fix | route status; after a fix: failed items + regression sweep re-checked |
-| 6 plan-design-route | orchestrator | FAIL -> 3, PASS -> plan.md rendered |
+| 6 plan-design-route | orchestrator | FAIL -> 3, PASS -> plan.md rendered + handoff: save `<DEST>.{md,json,context.json}`, print a fresh-session execute prompt |
 
 ## Execution (13 steps)
 

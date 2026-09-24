@@ -152,6 +152,20 @@ def test_planner_review_fail_fix_reverify_pass(planner_state):
     assert "PLAN APPROVED" in out
     md = (planner_state / "plan.md").read_text()
     assert "Integration tests (real dependencies)" in md and "Live checks" in md
+    assert "HANDOFF FOR A FRESH SESSION" in out
+    assert "executor --step 1 --plan <DEST>.json" in out and "<DEST>.context.json" in out
+
+
+def test_fresh_session_executor_picks_up_saved_context(planner_state, tmp_path):
+    make_plan(planner_state)
+    dest = tmp_path / "my-plan"
+    for src, suffix in (("plan.json", ".json"), ("context.json", ".context.json")):
+        (tmp_path / f"my-plan{suffix}").write_text((planner_state / src).read_text())
+    out = run(EXECUTOR, "--step", "1", "--plan", f"{dest}.json")
+    new_dir = Path(re.search(r"STATE_DIR=(\S+)", out).group(1))
+    assert new_dir != planner_state
+    ctx = json.loads((new_dir / "context.json").read_text())
+    assert ctx["verification_env"][2] == "ship: ./deploy.sh"
 
 
 def test_planner_escalation_then_one_more_round_is_rechecked(planner_state):

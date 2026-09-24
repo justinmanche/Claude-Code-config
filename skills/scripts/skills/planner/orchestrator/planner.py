@@ -432,6 +432,59 @@ def format_output(step: int, qr_status, state_dir) -> str | GateResult:
     return format_step(body, next_cmd, title=title)
 
 
+HANDOFF_TEMPLATE = """
+PLAN APPROVED -- HANDOFF FOR A FRESH SESSION
+============================================
+Rendered: {plan_md}
+
+The usual flow is: plan here, clear the session, execute in a new one. The
+STATE_DIR is a temp directory, so first make the plan durable:
+
+1. SAVE the three plan files together (use the user's requested path if they
+   gave one; otherwise docs/plans/<short-kebab-name> in the project repo):
+     cp {plan_md}      <DEST>.md
+     cp {plan_json}    <DEST>.json
+     cp {context_json} <DEST>.context.json
+   (<DEST>.context.json carries verification_env: the unit, integration,
+   ship and live-check commands the executor's gates run.)
+   Commit them if the project keeps plans in git.
+
+2. PRESENT to the user, as the LAST thing in your reply, this prompt in a
+   fenced code block, with <DEST> replaced by the absolute path you used:
+
+```
+Use the planner skill to execute the approved plan at <DEST>.md
+(plan JSON: <DEST>.json, context: <DEST>.context.json).
+
+Start execution with:
+  python3 -m skills.planner.orchestrator.executor --step 1 --plan <DEST>.json
+(working directory ~/.claude/skills/scripts), then follow each step's
+printed next command exactly. If some milestones were already implemented
+in an earlier session, add --reconcile to step 1.
+```
+
+   Add below the block, in one or two sentences, anything the fresh session
+   cannot learn from the plan files (e.g. credentials the user must export,
+   services that must be running). Say nothing else about the plan's content.
+"""
+
+
+def format_handoff(state_dir: str, plan_md: str) -> str:
+    """Terminal-pass instructions: persist the plan and print the execute prompt.
+
+    WHY: planning and execution normally run in separate sessions (the user
+    clears context between them). Everything execution needs must survive in
+    files, and the user needs a paste-ready prompt that starts the executor.
+    """
+    from pathlib import Path
+    sd = Path(state_dir)
+    return HANDOFF_TEMPLATE.format(
+        plan_md=plan_md,
+        plan_json=sd / "plan.json",
+        context_json=sd / "context.json",
+    )
+
+
 def main():
     """CLI entry point for planner orchestration."""
     parser = argparse.ArgumentParser(
@@ -477,11 +530,7 @@ def main():
         if result.terminal_pass and args.state_dir:
             plan_path = _translate_plan(args.state_dir)
             if plan_path:
-                print(f"\nPlan rendered to: {plan_path}")
-                print("Copy this file to the user's requested output path.")
-                print("ALSO copy plan.json from the same directory alongside it")
-                print("(same basename, .json extension). Execution mode reads the JSON:")
-                print(f"  python3 -m skills.planner.orchestrator.executor --step 1 --state-dir {args.state_dir}")
+                print(format_handoff(args.state_dir, plan_path))
     else:
         print(result)
 
