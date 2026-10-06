@@ -35,3 +35,6 @@
 **/.hypothesis
 **/.venv
 **/*.pyc
+
+# Track the user-level instructions file (writing rules that apply to every project)
+!CLAUDE.md

@@ -38,6 +38,7 @@ Failure to follow these patterns creates technical debt and inconsistency across
 | `codebase-analysis/`  | Systematic codebase exploration           | Repository architecture review           |
 | `prompt-engineer/`    | Prompt optimization and engineering       | Improving agent prompts                  |
 | `incoherence/`        | Consistency detection                     | Finding spec/implementation mismatches   |
+| `dev-policy/`         | Development policy: 13 sections (principles → privacy), definition-of-done check script, SessionStart/PostToolUse/Stop hook | Writing or reviewing code, tests, migrations, infra, docs; wiring a project |
 | `doc-sync/`           | Documentation synchronization             | Syncing docs across repos                |
 | `leon-writing-style/` | Style-matched content generation          | Writing content matching user's style    |
 | `arxiv-to-md/`        | arXiv paper to markdown conversion        | Converting papers for LLM consumption    |

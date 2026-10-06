@@ -1,0 +1,21 @@
+{
+  "_comment": "Regex (Python re.search, applied to the repo-relative path) -> policy sections. First match does not stop evaluation; all matching entries contribute. Projects add entries in .claude/dev-policy.json under \"paths\".",
+  "paths": [
+    { "pattern": "(^|/)migrations/", "sections": ["04-data-and-migrations", "05-security"] },
+    { "pattern": "(^|/)routes/", "sections": ["03-api-design", "05-security", "01-architecture"] },
+    { "pattern": "(^|/)(middleware|auth)/", "sections": ["05-security", "01-architecture"] },
+    { "pattern": "(^|/)services/", "sections": ["01-architecture", "02-code-quality", "05-security"] },
+    { "pattern": "(^|/)(workers?|jobs?|queue)/", "sections": ["04-data-and-migrations", "09-operations"] },
+    { "pattern": "(^|/)ai/", "sections": ["05-security", "12-privacy-and-compliance"] },
+    { "pattern": "(\\.test\\.|\\.spec\\.|(^|/)__tests__/|(^|/)__integration__/|(^|/)e2e/)", "sections": ["06-testing"] },
+    { "pattern": "(^|/)frontend/", "sections": ["07-frontend", "02-code-quality"] },
+    { "pattern": "\\.(tsx|jsx)$", "sections": ["07-frontend"] },
+    { "pattern": "(^|/)(infra|deploy|\\.github)/|(^|/)docker-compose|(^|/)Dockerfile|\\.bicep$", "sections": ["09-operations", "05-security"] },
+    { "pattern": "(^|/)openapi\\.(yaml|yml|json)$", "sections": ["03-api-design"] },
+    { "pattern": "(^|/)package(-lock)?\\.json$", "sections": ["05-security", "09-operations"] },
+    { "pattern": "\\.md$", "sections": ["10-documentation-and-decisions"] },
+    { "pattern": "\\.(ts|js|mjs|cjs)$", "sections": ["02-code-quality"] },
+    { "pattern": "\\.sql$", "sections": ["04-data-and-migrations"] },
+    { "pattern": "(^|/)\\.env", "sections": ["05-security", "09-operations"] }
+  ]
+}
