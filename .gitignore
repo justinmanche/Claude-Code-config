@@ -38,3 +38,6 @@
 
 # Track the user-level instructions file (writing rules that apply to every project)
 !CLAUDE.md
+
+# App-managed skill sync (downloaded by the Claude app, not authored here)
+skills/synced/
