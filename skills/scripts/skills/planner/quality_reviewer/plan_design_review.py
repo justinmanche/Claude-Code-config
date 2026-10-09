@@ -49,7 +49,17 @@ Brainstorm concerns for THIS plan:
   - Acceptance criteria that cannot be checked pass/fail
   - Missing verification: a data-layer or access-control change with no
     integration_tests; a user-visible change with no live_checks; tests
-    described only as mocked unit tests where mocks would hide the defect"""
+    described only as mocked unit tests where mocks would hide the defect
+  - An ABSENCE criterion ("no X remains", "grep returns nothing") proved by a
+    single pattern. Past runs missed a different spelling in each of three
+    rounds. It needs an inventory of every candidate occurrence, classified, or
+    a test that fails on a new occurrence.
+  - A milestone that changes how data is saved, edited, limited, validated or
+    deleted whose live_checks are single-step: no save -> change -> save ->
+    reload -> verify-earlier-state-intact sequence, no undo/clear path
+  - Outside actions the plan relies on (GitHub writes, cloud CLIs, remote
+    commands, credential or DB reads, deploys, pushes) that are not covered by
+    plan.json required_permissions; a missing or implausible push_policy"""
 
 
 STEP_3_ENUMERATION = """\
@@ -62,6 +72,17 @@ MILESTONES: each (ID, name, wave), with
 
 DECISIONS / CONSTRAINTS / RISKS: IDs and whether each has reasoning,
 backing, mitigation.
+
+ABSENCE CRITERIA: every acceptance criterion or live check that says something
+no longer exists / never appears; for each, what backs it (inventory, a test
+that fails on a new occurrence, or a single pattern).
+
+DATA-CHANGING MILESTONES: every milestone that changes saving, editing,
+limits, validation or deletion; for each, its multi-step live sequence and
+undo/clear path (or their absence).
+
+REQUIRED PERMISSIONS: the plan's required_permissions and push_policy, against
+the outside actions in verification_env, live_checks and the ship command.
 
 BOUNDARIES touched: each DB table/column, permission, tenant scope, API
 contract, generated artefact, migration named by any intent.
@@ -83,8 +104,17 @@ SEVERITY (plan-design):
     - DECISION_LOG_MISSING / POLICY_UNJUSTIFIED: non-trivial choice or
       policy default without logged, user-backed rationale
     - WAVE_CONFLICT: parallel milestones touch the same file/contract
+    - ABSENCE_UNPROVEN: an absence criterion backed by a single pattern
+      instead of an inventory (every candidate enumerated and classified)
+      or a test that fails on a new occurrence
+    - LIVE_SEQUENCE_GAP: a milestone that changes how data is saved, edited,
+      limited, validated or deleted without a multi-step live sequence
+      (create/save -> change -> save -> reload -> earlier state intact) and
+      an undo/clear path
 
   SHOULD (iterations 1-3):
+    - PERMISSION_GAP: an outside action the plan needs is missing from
+      required_permissions
     - Acceptance criterion not objectively checkable
     - Risk without mitigation; shallow reasoning chain
 

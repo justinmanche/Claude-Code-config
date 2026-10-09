@@ -19,7 +19,7 @@ def _get_schema():
     from ..shared.schema import (
         Plan, Overview, Milestone, CodeIntent, CodeChange, Decision,
         Documentation, Docstring, FunctionBlock, InlineComment, ReadmeEntry,
-        DiagramGraph, DiagramNode, DiagramEdge, validate_state,
+        DiagramGraph, DiagramNode, DiagramEdge, RequiredPermission, validate_state,
     )
     return {
         'Plan': Plan, 'Overview': Overview, 'Milestone': Milestone,
@@ -27,7 +27,8 @@ def _get_schema():
         'Documentation': Documentation, 'Docstring': Docstring,
         'FunctionBlock': FunctionBlock, 'InlineComment': InlineComment, 'ReadmeEntry': ReadmeEntry,
         'DiagramGraph': DiagramGraph, 'DiagramNode': DiagramNode,
-        'DiagramEdge': DiagramEdge, 'validate_state': validate_state,
+        'DiagramEdge': DiagramEdge, 'RequiredPermission': RequiredPermission,
+        'validate_state': validate_state,
     }
 
 
@@ -194,6 +195,43 @@ def set_verification(ctx: PlanContext, milestone: str, integration_tests=None,
     _bump_version(ms)
     ctx.save_plan(plan)
     return {"id": ms.id, "version": ms.version, "operation": "updated"}
+
+
+def set_execution_policy(ctx: PlanContext, repo_path: str = None, push_policy: str = None,
+                         required_permissions=None, replace_permissions: bool = False) -> dict:
+    """Set the plan's repo_path, push_policy and required_permissions.
+
+    required_permissions is a JSON list of {"rule": ..., "why": ...} objects
+    (each rule an exact Claude Code permission rule, e.g. "Bash(gh issue:*)").
+    Entries are upserted by rule; replace_permissions=true replaces the list.
+    Record only what the owner confirmed: the executor asks the owner to add
+    these rules before wave 1 and never grants them itself.
+    """
+    plan = ctx.load_plan()
+    schema = _get_schema()
+    if repo_path is not None:
+        plan.repo_path = repo_path or None
+    if push_policy is not None:
+        plan.push_policy = push_policy
+    if required_permissions is not None:
+        if isinstance(required_permissions, str):
+            required_permissions = json.loads(required_permissions)
+        incoming = [schema['RequiredPermission'](**p) for p in required_permissions]
+        kept = [] if replace_permissions else list(plan.required_permissions)
+        by_rule = {p.rule: i for i, p in enumerate(kept)}
+        for perm in incoming:
+            if perm.rule in by_rule:
+                kept[by_rule[perm.rule]] = perm
+            else:
+                by_rule[perm.rule] = len(kept)
+                kept.append(perm)
+        plan.required_permissions = kept
+    # Plan.model_validate on assignment is off; round-trip to enforce the schema.
+    schema['Plan'].model_validate(json.loads(plan.model_dump_json()))
+    ctx.save_plan(plan)
+    return {"id": plan.plan_id, "push_policy": plan.push_policy,
+            "required_permissions": len(plan.required_permissions),
+            "repo_path": plan.repo_path, "operation": "updated"}
 
 
 def set_intent(ctx: PlanContext, milestone: str, file: str = None,

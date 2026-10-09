@@ -241,6 +241,15 @@ if PYDANTIC_AVAILABLE:
         problem: str
         approach: str
 
+    # Claude Code permission rule: a tool name, optionally with a specifier in
+    # parentheses -- Bash(gh issue:*), WebFetch(domain:example.com), mcp__srv__tool.
+    PERMISSION_RULE_PATTERN = r"^[A-Za-z][A-Za-z0-9_.\-]*(\(.+\))?$"
+
+    class RequiredPermission(BaseModel):
+        """An outside-system action the plan needs the owner to pre-approve."""
+        rule: str = Field(pattern=PERMISSION_RULE_PATTERN)  # exact permission rule string
+        why: str = Field(min_length=1)  # what the plan does with it
+
     class Plan(BaseModel):
         """Root plan.json schema.
 
@@ -250,6 +259,19 @@ if PYDANTIC_AVAILABLE:
         plan_id: str = Field(default_factory=lambda: str(__import__('uuid').uuid4()))
         created_at: str = Field(default_factory=lambda: __import__('datetime').datetime.utcnow().isoformat())
         frozen_at: str | None = None  # Timestamp when plan execution began
+
+        # Execution settings the owner approves during planning (all optional so
+        # plans written before they existed still validate).
+        # repo_path: the repository the executor's agents work in; the executor
+        #   reads the local main tip there for each agent's base-commit preamble.
+        repo_path: str | None = None
+        # Outside actions the run needs (GitHub writes, cloud CLIs, remote
+        # commands, DB reads, deploys, pushes). The executor prints them as a
+        # /permissions list before wave 1; the orchestrator never grants them.
+        required_permissions: list[RequiredPermission] = Field(default_factory=list)
+        # When the orchestrator pushes main: after each wave's gate, once at the
+        # end, or never.
+        push_policy: Literal["after_each_wave", "at_end", "never"] = "at_end"
 
         overview: Overview
         planning_context: PlanningContext = Field(default_factory=PlanningContext)
@@ -496,7 +518,7 @@ if PYDANTIC_AVAILABLE:
         "QA_ITEM_ALL_FIELDS", "QA_ITEM_SCHEMA_TEMPLATE", "get_qa_state_schema_example",
         # Models
         "Context", "Plan", "Overview", "Milestone", "CodeIntent", "CodeChange",
-        "Decision", "Risk", "RejectedAlternative", "Wave",
+        "Decision", "Risk", "RejectedAlternative", "Wave", "RequiredPermission",
         "PlanningContext", "InvisibleKnowledge",
         "Documentation", "Docstring", "FunctionBlock", "InlineComment", "ReadmeEntry",
         "DiagramNode", "DiagramEdge", "DiagramGraph",

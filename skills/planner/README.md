@@ -47,6 +47,20 @@ fix routers -- with the gates rebuilt around what measurably catches defects.
 | impl-live (once) | `milestones[].live_checks`, mechanically | redeploy; failed items + regression sweep of the fix's flows, 1 agent |
 | impl-docs (once) | 1 reviewer | failed items + regression sweep, 1 agent |
 
+## Lessons built in from executed plans
+
+Each of these came from a real run and is now generated into the step text, not
+left to the orchestrator to remember.
+
+| Lesson | What the planner does now |
+| ------ | ------------------------- |
+| Agents in isolated git worktrees started from stale code (Claude Code builds the worktree from origin/main and nothing had been pushed) | Every developer, technical-writer, live-fix and doc-fix dispatch begins with a base-commit preamble: the exact SHA of the local `main` tip (read with `git rev-parse` in the plan's repo when the step prints) and the command `git merge-base --is-ancestor <sha> HEAD \|\| git merge --ff-only main`. The agent must be on top of that SHA or stop and report. Parallel waves recommend `isolation: worktree` per agent with a distinct database/container port each; the orchestrator merges agent branches into a wave branch, then into main after the gate passes. After a wave merges, the gate output says to push main if `push_policy` is `after_each_wave`, otherwise it reminds that later worktrees start from stale origin/main and the preamble covers it. The repo comes from `--repo`, else the plan's `repo_path`, else the git repo of the working directory, and is stored in `exec-state.json`. |
+| "Nothing like X remains" was checked with regex sweeps that each missed a form, three rounds running | Planning guidance requires an absence criterion to be backed by an inventory (every candidate occurrence enumerated and classified) or a test that fails on a new occurrence. The plan-design review flags a single-pattern absence criterion (MUST), and developers report `INVENTORY:` counts. |
+| A data-loss bug showed up only in a multi-step sequence on the live system (save short answer, lengthen past a new limit, save, reload: the earlier value was gone) | Planning guidance requires every milestone that changes how data is saved, edited, limited, validated or deleted to have a multi-step live sequence plus an undo/clear path. The plan-design review flags the gap (MUST) and the live regression sweep runs save/modify/reload sequences over changed code. |
+| Required permissions were discovered mid-run, one blocked command at a time | Plans carry `required_permissions` and `push_policy`. The planner asks the owner during planning. Executor step 1 and the live-verify step print the rules as a `/permissions` list; the orchestrator asks the owner to add them before wave 1 and never edits settings. Every dispatched agent prompt says: if a command is denied, stop and report exactly which command. |
+| A developer ran every full suite (unit, integration, e2e) itself and the wave gate then ran them all again; on a loaded machine the e2e run failed at random and one milestone took 4.5 hours (Risky, Node 24 upgrade) | Developers run only targeted tests: the test files they changed or wrote and the named integration specs. A criterion that names a full suite is reported as `LEFT-TO-GATE:` and does not block PASS. The wave gate is the one full run, and it checks the machine load (`uptime`) first so load-induced failures are not read as real. The architect names each `integration_test` by the file or spec it lives in, not "the full suite is green". |
+| Agents copied scripts onto a VM to run read-only checks | Live-verify guidance says to pass read-only remote checks inline (for example `docker exec <container> <runtime> -e '...'` through the cloud CLI's run-command). |
+
 ## What changed from planner-old, and why
 
 Measured on the 2026-09 Risky run (issues #180-#203, 281 subagent runs, 31.1M
@@ -68,6 +82,13 @@ subagent tokens):
 cd ~/.claude/skills/scripts
 python3 -m pytest tests/test_planner_lean.py     # needs pytest + pydantic
 ```
+
+`tests/test_planner_lessons.py` (unittest-based, also collected by pytest; run
+it with `python3 -m unittest tests.test_planner_lessons`) covers the lessons
+above: schema accept/reject for `required_permissions` and `push_policy`, the
+permissions block in executor step 1 and the live-verify step, the base-commit
+preamble with a real SHA, the push-policy messages, and the review, developer
+and live-verify rules.
 
 The tests drive both orchestrators through every route (review fail -> fix ->
 re-check -> pass, wave advance, live fail -> fix -> redeploy -> pass, live

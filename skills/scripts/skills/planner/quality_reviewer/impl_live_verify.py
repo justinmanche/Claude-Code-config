@@ -13,6 +13,7 @@ the vendor could not see). Mocked unit tests and code review cannot observe
 those; the running system can.
 """
 
+from skills.planner.shared.builders import LIVE_SEQUENCE_RULE, REMOTE_INLINE_RULE
 from .qr_verify_base import VerifyBase
 
 
@@ -48,12 +49,25 @@ class ImplLiveVerify(VerifyBase):
             "    impossible), FAIL with finding 'ENVIRONMENT: <what blocked>'.",
             "  - Leave no test data behind that would confuse a real user; reuse",
             "    the project's QA accounts and fixtures.",
+            "  - " + REMOTE_INLINE_RULE.replace("\n", "\n    "),
+            "  - If a command is denied, stop and report exactly which command; do not",
+            "    work around it.",
         ]
         if item.get("id", "").startswith("reg-"):
             guidance.extend([
                 "",
                 "REGRESSION SWEEP: `git diff` the last live-fix round, list the user",
                 "flows those files serve, and re-run each flow end to end.",
+                "",
+                "SAVE/MODIFY/RELOAD SEQUENCES: for every changed path that saves, edits,",
+                "limits, validates or deletes data, run a multi-step sequence on the deployed",
+                "system, not a single save:",
+                "  create/save -> change (e.g. lengthen past a limit, clear, delete) -> save ->",
+                "  reload -> verify the EARLIER saved state is intact (nothing erased or",
+                "  truncated); then exercise the undo / clear path.",
+                "FAIL with the exact sequence if an earlier value was lost.",
+                "",
+                LIVE_SEQUENCE_RULE,
             ])
         return guidance
 

@@ -32,13 +32,13 @@ it describes what actually shipped (including live fixes).
 
 import argparse
 import json
+import os
 import shutil
 import sys
 import tempfile
 from pathlib import Path
 
 from skills.lib.workflow.types import AgentRole
-from skills.lib.workflow.prompts import subagent_dispatch, template_dispatch
 from skills.lib.workflow.prompts.step import format_step
 from skills.planner.shared.qr.types import QRState, QRStatus, LoopState
 from skills.planner.shared.gates import build_gate_output, GateResult
@@ -51,6 +51,15 @@ from skills.planner.shared.qr.utils import (
     write_live_items,
 )
 from skills.planner.shared.builders import THINKING_EFFICIENCY
+from skills.planner.shared.dispatch import agent_dispatch, agents_dispatch
+from skills.planner.shared.git_base import base_commit_preamble, resolve_repo_path
+from skills.planner.shared.permissions import (
+    final_push_actions,
+    permissions_block,
+    permissions_gate_actions,
+    push_policy_line,
+    wave_push_actions,
+)
 from skills.planner.shared.constraints import (
     ORCHESTRATOR_CONSTRAINT_EXTENDED,
     format_state_banner,
@@ -122,6 +131,39 @@ def _milestone(plan: dict, mid: str) -> dict:
             return m
     return {"id": mid, "name": "(not found in plan.json)", "number": 0,
             "files": [], "acceptance_criteria": []}
+
+
+def _repo_path(state_dir: str) -> str | None:
+    """Repository recorded by step 1 (exec-state.json), else plan.json repo_path."""
+    recorded = _load_exec_state(state_dir).get("repo_path")
+    if recorded:
+        return recorded
+    return resolve_repo_path(None, _load_plan(state_dir), "")
+
+
+def _base_preamble(state_dir: str) -> str:
+    """Base-commit preamble naming the local main tip as of THIS dispatch."""
+    return base_commit_preamble(_repo_path(state_dir))
+
+
+def _isolation_note(count: int) -> list[str]:
+    """How to run a wave's agents in isolated worktrees and merge them back."""
+    if count < 2:
+        return [
+            "ISOLATION: one agent in this wave -- run it in the main checkout (no worktree).",
+            "If you did run it with isolation: worktree, merge its branch into main",
+            "(git merge --no-ff <agent branch>) before invoking the next step.",
+        ]
+    return [
+        f"ISOLATION (recommended, {count} agents in parallel): dispatch each agent with",
+        "isolation: worktree and give each a DISTINCT database/container port (each agent's",
+        "prompt below names its slot; port = the base port in verification_env + slot) so",
+        "their integration tests do not collide.",
+        "MERGING: create a wave branch from main; merge each agent's branch into it",
+        "(git merge --no-ff <agent branch>); run the gates on the wave branch; after the",
+        "wave's gate PASSES (step 5) merge the wave branch into main. A merge conflict ->",
+        "dispatch a developer with the conflict; never resolve it yourself.",
+    ]
 
 
 def _resolve_state_dir(state_dir: str | None, plan: str | None) -> str:
@@ -276,9 +318,17 @@ def step_init(ctx: dict) -> dict:
             state["completed"].append(mid)
     state["waves"] = _compute_waves(plan, state["completed"])
     state["wave_index"] = min(state.get("wave_index", 0), max(len(state["waves"]) - 1, 0))
+    repo = resolve_repo_path(getattr(args, "repo", None), plan, os.getcwd())
+    if repo:
+        state["repo_path"] = repo
     _save_exec_state(state_dir, state)
 
     print(f"STATE_DIR={state_dir}")
+    repo_lines = [f"REPO: {repo}"] if repo else [
+        "REPO: NOT RESOLVED -- pass --repo <path> to step 1 (or set repo_path in plan.json);",
+        "  without it agents get no base-commit check and may start from stale code.",
+    ]
+    repo_lines.append(push_policy_line(plan))
 
     pending = [mid for w in state["waves"] for mid in w]
 
@@ -294,7 +344,7 @@ def step_init(ctx: dict) -> dict:
                 f"PLAN_FILE: {state_dir}/plan.json\n"
                 f"Report exactly one of: SATISFIED | NOT_SATISFIED | PARTIALLY_SATISFIED")
         command = "python3 -m skills.planner.quality_reviewer.exec_reconcile --step 1 --milestone $number"
-        dispatch = template_dispatch(
+        dispatch = agents_dispatch(
             agent_type="quality-reviewer",
             template=tmpl,
             targets=targets,
@@ -305,6 +355,10 @@ def step_init(ctx: dict) -> dict:
         return {
             "title": "exec-init - Reconciliation",
             "actions": [
+                *repo_lines,
+                "",
+                *permissions_gate_actions(plan),
+                "",
                 ORCHESTRATOR_CONSTRAINT_EXTENDED,
                 "",
                 dispatch,
@@ -338,6 +392,10 @@ def step_init(ctx: dict) -> dict:
         "WORKFLOW PER WAVE: developers -> unit + integration gates -> 1 reviewer -> route",
         "After the last wave: ship -> live checks -> documentation -> 1 reviewer -> retrospective.",
         "",
+        *repo_lines,
+        "",
+        *permissions_gate_actions(plan),
+        "",
         "This step is ANALYSIS ONLY. Set up TodoWrite tracking for the waves.",
         "Do NOT dispatch agents here.",
     ]
@@ -369,10 +427,11 @@ def step_impl_code_work(ctx: dict) -> dict:
     if qr.state == LoopState.RETRY:
         # Router (exec_implement.py) detects FAIL items and runs the fix script.
         mark_fix_dispatched(state_dir, "impl-code")
-        dispatch = subagent_dispatch(
+        dispatch = agent_dispatch(
             agent_type="developer",
             command=invoke_cmd,
             prompt=f"PLAN_FILE: {state_dir}/plan.json\nFIX MODE: qr-impl-code.json has FAIL items.",
+            base_preamble=_base_preamble(state_dir),
         )
         return {
             "title": "impl-code-work - Fix Mode",
@@ -384,6 +443,8 @@ def step_impl_code_work(ctx: dict) -> dict:
                 ORCHESTRATOR_CONSTRAINT_EXTENDED,
                 "",
                 dispatch,
+                "",
+                *_isolation_note(1),
                 "",
                 "Developer reads qr-impl-code.json and fixes every FAIL item.",
                 "Then run the SAME gates as after a wave (below) before continuing.",
@@ -403,9 +464,10 @@ def step_impl_code_work(ctx: dict) -> dict:
 
     wave = waves[idx]
     targets = []
-    for mid in wave:
+    for slot, mid in enumerate(wave, 1):
         m = _milestone(plan, mid)
         targets.append({
+            "slot": str(slot),
             "mid": mid,
             "name": m.get("name", ""),
             "files": ", ".join(m.get("files", [])) or "(see plan)",
@@ -419,14 +481,20 @@ def step_impl_code_work(ctx: dict) -> dict:
         f"FILES: $files\n"
         f"ACCEPTANCE CRITERIA:\n$criteria\n"
         f"INTEGRATION TESTS (real dependency, required):\n$integration\n"
-        f"Implement ONLY this milestone. Other milestones in this wave run in parallel."
+        f"ISOLATION SLOT: $slot of {len(wave)}. If you run in a worktree, use database/container "
+        f"port = the base port in verification_env + $slot so parallel agents do not collide.\n"
+        f"Implement ONLY this milestone. Other milestones in this wave run in parallel.\n"
+        f"TESTS: run only the test files you changed or wrote and the specs that exercise\n"
+        f"your change. The full unit/integration/e2e suites run once at the wave gate after\n"
+        f"you return; a criterion that names a full suite is reported as 'left to gate'."
     )
-    dispatch = template_dispatch(
+    dispatch = agents_dispatch(
         agent_type="developer",
         template=tmpl,
         targets=targets,
         command=invoke_cmd,
         instruction=f"Wave {idx + 1}/{len(waves)}: {len(wave)} milestone(s).",
+        base_preamble=_base_preamble(state_dir),
     )
 
     return {
@@ -435,6 +503,8 @@ def step_impl_code_work(ctx: dict) -> dict:
             ORCHESTRATOR_CONSTRAINT_EXTENDED,
             "",
             dispatch,
+            "",
+            *_isolation_note(len(wave)),
             "",
             "AFTER ALL DEVELOPERS RETURN:",
             *_wave_gate_actions(state_dir, fix_mode=False),
@@ -448,10 +518,16 @@ def _wave_gate_actions(state_dir: str, fix_mode: bool) -> list[str]:
     return [
         "  GATES (run the commands from verification_env; one at a time):",
         *_verification_env_lines(state_dir),
-        "  1. Unit tests + typecheck for every touched package.",
+        "  Developers ran only targeted tests; THIS is the one full run, so it",
+        "  carries every criterion they reported as 'left to gate'.",
+        "  Check the machine load first (uptime): with the 1-minute load above",
+        "  the core count, full suites fail at random -- wait or ask the owner to",
+        "  free the machine rather than reading those failures as real.",
+        "  1. FULL unit suites + typecheck for every touched package.",
         "  2. The wave's integration_tests against the REAL dependency (start it",
-        "     if needed). Mocked tests cannot see wrong columns, casts or access",
-        "     policies; these can. A missing or skipped integration test is a failure.",
+        "     if needed), as full suites. Mocked tests cannot see wrong columns,",
+        "     casts or access policies; these can. A missing or skipped",
+        "     integration test is a failure.",
         "  3. Any failure -> dispatch a developer with the failure output",
         "     (unclear cause -> dispatch debugger first). Never fix it yourself.",
         "  4. All green -> invoke the next step" + (" (re-check)." if fix_mode else " (code review)."),
@@ -488,6 +564,13 @@ def step_impl_code_route(ctx: dict) -> GateResult:
             _save_exec_state(state_dir, state)
             idx += 1
 
+    plan = _load_plan(state_dir)
+    merge_lines = [
+        "",
+        "MERGE (if agents ran in isolated worktrees): merge the wave branch into main now,",
+        "before the next step prints, so the next dispatch names the new main tip.",
+        *wave_push_actions(plan, more_waves=idx < len(waves)),
+    ]
     if idx < len(waves):
         pass_step = STEP_CODE_WORK
         pass_message = (f"Wave {idx}/{len(waves)} verified. "
@@ -495,6 +578,7 @@ def step_impl_code_route(ctx: dict) -> GateResult:
     else:
         pass_step = STEP_LIVE_VERIFY
         pass_message = "All waves verified. Proceed to step 6 (ship + live verification)."
+    pass_message += "\n" + "\n".join(merge_lines)
 
     return build_gate_output(
         module_path=MODULE_PATH,
@@ -513,6 +597,10 @@ def step_impl_code_route(ctx: dict) -> GateResult:
 def _ship_actions(ctx: dict) -> list[str]:
     state_dir = ctx["state_dir"]
     return [
+        *permissions_block(_load_plan(state_dir)),
+        "  (If any of these is not yet allowed, ask the owner to add it via /permissions",
+        "   before shipping or dispatching the live checker.)",
+        "",
         "SHIP FIRST (the one exception to delegate-only: run it yourself via Bash):",
         *_verification_env_lines(state_dir),
         "  - Run the ship command from verification_env; capture output to a log",
@@ -578,10 +666,11 @@ def step_impl_live_fix(ctx: dict) -> dict:
     state_dir = ctx["state_dir"]
     qr = ctx["qr"]
     mark_fix_dispatched(state_dir, "impl-live")
-    dispatch = subagent_dispatch(
+    dispatch = agent_dispatch(
         agent_type="developer",
         command=f"python3 -m skills.planner.developer.exec_live_fix --step 1 --state-dir {state_dir}",
         prompt=f"PLAN_FILE: {state_dir}/plan.json\nFIX MODE: qr-impl-live.json has FAIL items.",
+        base_preamble=_base_preamble(state_dir),
     )
     return {
         "title": "impl-live-fix",
@@ -591,6 +680,8 @@ def step_impl_live_fix(ctx: dict) -> dict:
             ORCHESTRATOR_CONSTRAINT_EXTENDED,
             "",
             dispatch,
+            "",
+            *_isolation_note(1),
             "",
             "Developer returns PASS, or FAIL: ENVIRONMENT/<reason>.",
             "  FAIL: ENVIRONMENT -> fix the environment with the user (AskUserQuestion),",
@@ -622,10 +713,11 @@ def step_impl_docs_work(ctx: dict) -> dict:
                   f"Implementation is complete, code review passed, live checks passed.")
         title = "impl-docs-work"
 
-    dispatch = subagent_dispatch(agent_type="technical-writer", command=invoke_cmd, prompt=prompt)
+    dispatch = agent_dispatch(agent_type="technical-writer", command=invoke_cmd, prompt=prompt,
+                              base_preamble=_base_preamble(state_dir))
     return {
         "title": title,
-        "actions": [*banner, ORCHESTRATOR_CONSTRAINT_EXTENDED, "", dispatch],
+        "actions": [*banner, ORCHESTRATOR_CONSTRAINT_EXTENDED, "", dispatch, "", *_isolation_note(1)],
         "next": f"python3 -m {MODULE_PATH} --step 10 --state-dir {state_dir}",
     }
 
@@ -688,7 +780,10 @@ def step_retrospective(ctx: dict) -> dict:
             "Verification Gaps: [milestones without integration_tests/live_checks]",
             *_known_issue_lines(state),
             "Review Iterations: [per gate]",
+            "Permissions requested mid-run: [any denied command that was reported]",
             "Feedback for Future Plans: [actionable suggestions]",
+            "",
+            *final_push_actions(_load_plan(state_dir)),
         ],
         "next": "",
     }
@@ -766,6 +861,9 @@ def main():
                         help="State directory (planner STATE_DIR, or one created by step 1)")
     parser.add_argument("--plan", type=str, default=None,
                         help="Step 1 only: plan.json, or plan.md with a sibling .json")
+    parser.add_argument("--repo", type=str, default=None,
+                        help="Step 1 only: repository the agents work in (default: plan.json "
+                             "repo_path, else the git repo of the current directory)")
     parser.add_argument("--reconcile", action="store_true",
                         help="Step 1 only: verify existing code against pending milestones first")
     parser.add_argument("--done", action="append", default=[],

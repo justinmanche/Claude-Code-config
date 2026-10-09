@@ -317,6 +317,23 @@ def test_executor_skips_live_gate_without_live_checks(planner_state):
     assert not (sd / "qr-impl-live.json").exists()
 
 
+def test_developers_run_targeted_tests_and_gate_runs_full_suites_once(planner_state):
+    # A developer re-running every full suite doubled the slowest part of a wave
+    # and, on a loaded machine, made e2e fail at random (Risky, 2026-10-09).
+    make_plan(planner_state)
+    sd = planner_state
+    run(EXECUTOR, "--step", "1", "--state-dir", str(sd))
+    out = step(EXECUTOR, 2, sd)
+    assert "full unit/integration/e2e suites run once at the wave gate" in out
+    assert "THIS is the one full run" in out and "uptime" in out
+
+    dev = run("skills.planner.developer.exec_implement_execute", "--step", "3", "--state-dir", str(sd))
+    assert "Do NOT run a full unit, integration or e2e suite" in dev
+    assert "left to gate" in dev
+    ret = run("skills.planner.developer.exec_implement_execute", "--step", "4", "--state-dir", str(sd))
+    assert "LEFT-TO-GATE:" in ret and "do not block PASS" in ret
+
+
 def test_set_verification_cli_flags(planner_state):
     make_plan(planner_state)
     run("skills.planner.cli.plan", "--state-dir", str(planner_state), "set-verification",

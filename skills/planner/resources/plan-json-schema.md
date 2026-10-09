@@ -30,7 +30,28 @@ plan.json
 
   milestones: [Milestone]
   milestone_dependencies: MilestoneDependencies
+
+  # Execution settings (optional; set with set-execution-policy)
+  repo_path: string | null            # repository the executor's agents work in
+  required_permissions: [RequiredPermission]
+  push_policy: "after_each_wave" | "at_end" | "never"   # default "at_end"
 ```
+
+---
+
+## Required Permission
+
+An outside action the owner pre-approves before execution. The planner asks the
+owner during planning; the executor prints the list as `/permissions` rules.
+
+```json
+{ "rule": "Bash(gh issue:*)", "why": "close the tracking issue when the run ends" }
+```
+
+`rule` is an exact Claude Code permission rule string (a tool name, optionally
+with a specifier in parentheses). `why` is required. Record only rules the owner
+confirmed. `push_policy` says when the orchestrator pushes main: after each
+wave's gate, once at the end, or never.
 
 ---
 
@@ -192,6 +213,15 @@ or JSON lists in batch mode).
 - `live_checks`: observable, role-specific steps on the deployed system
   ("as <role>, do X, see Y"). Required when a user can see or do anything
   differently. The executor turns each into one item of qr-impl-live.json.
+  A milestone that changes how data is saved, edited, limited, validated or
+  deleted needs at least one multi-step sequence (create/save -> change ->
+  save -> reload -> verify the earlier state is intact) and an undo/clear path.
+  Read-only checks on a remote machine pass their code inline rather than
+  copying a script onto it.
+- Absence criteria ("no X remains", "grep returns nothing") in
+  `acceptance_criteria` or `live_checks` are backed by an inventory (every
+  candidate occurrence enumerated and classified) or by a test that fails on a
+  new occurrence, never by a single pattern.
 
 There are no `code_changes` (planned diffs) or planned `documentation` in the
 lean planner: developers implement from `code_intents`, and documentation is

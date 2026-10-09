@@ -80,7 +80,9 @@ QR_PHASES: dict[str, dict] = {
         "regression_check": (
             "REGRESSION SWEEP: read `git diff` of the last live-fix round, then re-run on the "
             "deployed system every user flow those files serve (not only the failed check). "
-            "None regressed."
+            "For every changed path that saves, edits, limits, validates or deletes data, run a "
+            "multi-step sequence (save -> change -> save -> reload -> verify the earlier state is "
+            "intact) plus its undo/clear path. None regressed."
         ),
     },
     "impl-docs": {

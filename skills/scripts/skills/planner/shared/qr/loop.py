@@ -19,8 +19,8 @@ Iteration increments only on a re-check, so severity de-escalation
 
 from __future__ import annotations
 
-from skills.lib.workflow.prompts import subagent_dispatch
 from skills.planner.shared.builders import format_forbidden
+from skills.planner.shared.dispatch import agent_dispatch
 from skills.planner.shared.constraints import ORCHESTRATOR_CONSTRAINT_EXTENDED, format_state_banner
 from skills.planner.shared.qr.constants import QR_ITERATION_LIMIT
 from skills.planner.shared.qr.phases import get_phase_config
@@ -65,7 +65,7 @@ def review_step(module_path: str, title: str, phase: str, model: str | None = "o
 
         review_script = get_phase_config(phase)["review_script"]
         prompt = extra_prompt(ctx) if extra_prompt else ""
-        dispatch = subagent_dispatch(
+        dispatch = agent_dispatch(
             agent_type="quality-reviewer",
             command=f"python3 -m {review_script} --step 1 --state-dir {state_dir}",
             prompt=prompt,
@@ -174,7 +174,7 @@ def reverify_step(module_path: str, title: str, phase: str, pre_actions=None):
 
         verify_script = get_phase_config(phase)["verify_script"]
         flags = " ".join(f"--qr-item {i['id']}" for i in items)
-        dispatch = subagent_dispatch(
+        dispatch = agent_dispatch(
             agent_type="quality-reviewer",
             command=f"python3 -m {verify_script} --step 1 --state-dir {state_dir} {flags}",
         )

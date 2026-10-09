@@ -32,5 +32,16 @@ and `INTENT.md`. This file maps steps to scripts.
 | 12 | `step_impl_docs_route` | - |
 | 13 | `step_retrospective` | - |
 
+## Dispatch guard rails
+
+Every sub-agent dispatch goes through `shared/dispatch.py` (`agent_dispatch`,
+`agents_dispatch`), which appends the denied-command rule. Developer,
+technical-writer, live-fix and doc-fix dispatches (executor steps 2, 8, 9) also pass
+`base_preamble=` from `shared/git_base.py`: the current local `main` SHA and the
+fast-forward command. `shared/permissions.py` builds the `/permissions` list printed
+by executor step 1 and step 6, and the per-policy push messages (step 5 pass, step 13).
+`executor.py step 1` accepts `--repo` and stores the resolved repository in
+`exec-state.json`.
+
 Phase registry (step numbers, scripts, regression-sweep text): `shared/qr/phases.py`.
 Route targets for verify scripts' RESULT lines: `shared/qr/constants.QR_ROUTING`.

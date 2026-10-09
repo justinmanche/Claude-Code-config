@@ -9,7 +9,7 @@ integration tests, live verification on the deployed system.
 | ----------- | ----------------------------------------------- | ------------------------------------- |
 | `SKILL.md`  | Skill activation and invocation                 | Using the planner skill               |
 | `INTENT.md` | Design rationale, invariants, state contracts   | Changing gates, steps or state files  |
-| `README.md` | Flows, step tables, measured rationale, tests   | Understanding the planner             |
+| `README.md` | Flows, step tables, lessons built in, tests     | Understanding the planner             |
 
 ## Subdirectories
 
@@ -19,5 +19,6 @@ integration tests, live verification on the deployed system.
 
 Python code: `scripts/skills/planner/` (orchestrator/, architect/, developer/,
 technical_writer/, quality_reviewer/, shared/, cli/).
-Tests: `scripts/tests/test_planner_lean.py`.
+Tests: `scripts/tests/test_planner_lean.py` (routes), `scripts/tests/test_planner_lessons.py`
+(permissions, push policy, base-commit preamble, review rules).
 Previous workflow: `../planner-old/` (Python: `scripts/skills/planner_old/`).

@@ -16,6 +16,7 @@ For QR fix mode, see exec_implement_qr_fix.py.
 Router (exec_implement.py) dispatches to appropriate script.
 """
 
+from skills.planner.shared.builders import INVENTORY_REPORT_RULE
 from skills.planner.shared.constraints import format_state_banner
 
 
@@ -91,13 +92,36 @@ def get_step_guidance(
         return {
             "title": STEPS[3],
             "actions": [
-                "VERIFY your milestone.",
+                "VERIFY your milestone -- TARGETED runs only.",
                 "",
-                "1. Run unit tests + typecheck for touched packages (commands in",
-                "   context.json verification_env). 100% pass, zero warnings.",
-                "2. Run this milestone's integration_tests against the real dependency.",
-                "   Start the dependency if needed. A mocked substitute does not count.",
-                "3. Check EVERY acceptance criterion explicitly.",
+                "The orchestrator runs every FULL suite (unit, integration, e2e) once,",
+                "at the wave gate after you return. Running them here too doubles the",
+                "slowest part of the wave and, with parallel developers, overloads the",
+                "machine so the suites fail at random. So:",
+                "",
+                "1. Typecheck the touched packages (commands in context.json",
+                "   verification_env). Zero errors.",
+                "2. Run the unit test FILES for the code you changed and the tests you",
+                "   wrote, by path (e.g. `npx jest src/x/__tests__/y.test.ts`,",
+                "   `npx vitest run src/z.test.tsx`), not the whole package suite.",
+                "   100% pass, zero warnings.",
+                "3. Run this milestone's integration_tests against the real dependency,",
+                "   as the named test FILES/specs (e.g. `npx jest --config",
+                "   jest.integration.config.js suites/a.integration.test.ts`,",
+                "   `npx playwright test tests/40_b.spec.ts`). Start the dependency if",
+                "   needed; a mocked substitute does not count. Where an entry names a",
+                "   whole suite, run the spec files that exercise your change and leave",
+                "   the full run to the gate.",
+                "4. Do NOT run a full unit, integration or e2e suite, even for a",
+                "   change that affects everything (runtime upgrade, shared test setup):",
+                "   the gate runs it, and any failure comes back to a developer with",
+                "   the output.",
+                "5. Check EVERY acceptance criterion explicitly. A criterion that says",
+                "   a full suite is green is proven by the gate: report it as",
+                "   'left to gate', not as passed and not as failed.",
+                "6. " + INVENTORY_REPORT_RULE.replace("\n", "\n   "),
+                "   A single grep that returns nothing is not the proof: other spellings,",
+                "   string-built forms and other file types can still hold the thing.",
                 "",
                 "If tests or criteria fail: fix and re-verify. You ARE the",
                 "developer -- do not report failures you can fix yourself.",
@@ -115,6 +139,11 @@ def get_step_guidance(
                 "  PASS",
                 "Optionally followed by one line per deviation from the plan:",
                 "  DEVIATION: <what and why>",
+                "and one line per absence criterion you proved (see step 3):",
+                "  INVENTORY: <criterion> -- <N> candidates; <a> removed, <b> kept (reason), <c> out of scope",
+                "and one line per criterion left to the gate (a full suite you did not run):",
+                "  LEFT-TO-GATE: <criterion>",
+                "Criteria left to the gate do not block PASS.",
                 "",
                 "If blocked (criterion unattainable, contradiction in plan):",
                 "  FAIL: <one-line reason>",

@@ -56,15 +56,26 @@ first round is a check round and fix rounds count from 2 like every gate.
    before a qr file is deleted they are copied to exec-state.json
    `known_issues` and listed in the retrospective; the planner's approval
    message lists plan-design leftovers.
+8. Agents that write code or docs start from the current local `main` tip.
+   Each such dispatch names the SHA (computed when the step prints) and the
+   fast-forward command; an agent that cannot reach it stops and reports.
+9. Every dispatched agent prompt carries the denied-command rule (stop and
+   report exactly which command; never work around it). Claude never grants
+   itself permissions: the owner approves `required_permissions` up front.
+10. An absence criterion is proven by an inventory or a test that fails on a
+    new occurrence, never by one pattern. A milestone that changes how data is
+    saved, edited, limited, validated or deleted has a multi-step live
+    sequence and an undo/clear path. The plan-design reviewer fails the plan
+    (MUST) when either is missing.
 
 ## State files
 
 | File | Written by | Notes |
 | ---- | ---------- | ----- |
 | `context.json` | orchestrator step 2 | adds `verification_env: [str]` (optional in schema for planner-old compatibility) |
-| `plan.json` | architect via `cli.plan` | milestones add `integration_tests`, `live_checks` (`set-verification`); no `code_changes` are produced |
+| `plan.json` | architect via `cli.plan` | milestones add `integration_tests`, `live_checks` (`set-verification`); no `code_changes` are produced. Optional plan-level `repo_path`, `required_permissions: [{rule, why}]` (exact permission rule strings) and `push_policy` (`after_each_wave` \| `at_end` \| `never`, default `at_end`), set with `set-execution-policy` from owner-confirmed answers |
 | `qr-{phase}.json` | reviewer (Write), re-checkers (`cli.qr update-item`), Python | phases: plan-design, impl-code, impl-live, impl-docs; adds `awaiting_reverify`, `extra_round` |
-| `exec-state.json` | executor Python | adds `known_issues` (FAIL items that outlived their gate) |
+| `exec-state.json` | executor Python | adds `known_issues` (FAIL items that outlived their gate) and `repo_path` (the repository whose local main tip each dispatch names) |
 
 ## Evidence
 
@@ -73,6 +84,24 @@ per-item verifiers that added no findings beyond the decomposer's; plan-code
 review 30% for catches `tsc` would make; live checks 1% of tokens and 7 real
 defects that no other gate could observe. The lean gates keep every stage
 that caught a defect and replace the rest.
+
+## Execution policy (permissions, push, worktrees)
+
+Evidence: in the 2026-10 run, agents in isolated worktrees started without the
+earlier waves because nothing was pushed; outside-system writes, remote file
+writes, credential reads and some skill scripts were blocked one at a time in
+auto mode; a data-loss bug appeared only in a save, lengthen, save, reload
+sequence; and "nothing like X remains" was checked with a different regex in
+each of three rounds.
+
+- The planner asks the owner for outside actions while planning and records
+  them as `required_permissions`; the executor prints them as a `/permissions`
+  list (step 1 and the live-verify step) and the orchestrator asks the owner to
+  add them before wave 1. It never edits settings.
+- Pushing is a plan decision (`push_policy`), not an orchestrator habit. With
+  `at_end` or `never` the base-commit preamble is what keeps worktrees current.
+- Parallel waves recommend `isolation: worktree`, a distinct database/container
+  port per agent, a wave branch for the merge, and main only after the gate.
 
 ## Rejected alternatives
 

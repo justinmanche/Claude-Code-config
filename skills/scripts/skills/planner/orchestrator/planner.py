@@ -31,13 +31,13 @@ from skills.lib.workflow.constants import (
     SUB_AGENT_QUESTION_FORMAT,
     QUESTION_RELAY_HANDLER,
 )
-from skills.lib.workflow.prompts import subagent_dispatch, template_dispatch
 from skills.lib.workflow.prompts.step import format_step
 from skills.planner.shared.qr.types import QRState, QRStatus, LoopState
 from skills.planner.shared.gates import build_gate_output, GateResult
 from skills.planner.shared.qr.cli import add_qr_args
 from skills.planner.shared.resources import get_mode_script_path, PlannerResourceProvider
 from skills.planner.shared.builders import THINKING_EFFICIENCY, format_forbidden
+from skills.planner.shared.dispatch import agent_dispatch
 from skills.planner.shared.constraints import (
     ORCHESTRATOR_CONSTRAINT_EXTENDED,
     format_state_banner,
@@ -101,7 +101,7 @@ def _build_fix_mode_output(title, agent, agent_role, script, mode_total_steps, q
     mode_script = get_mode_script_path(script)
     invoke_cmd = f"python3 -m {mode_script} --step 1 --state-dir {state_dir}"
 
-    dispatch_prompt = subagent_dispatch(
+    dispatch_prompt = agent_dispatch(
         agent_type=agent,
         command=invoke_cmd,
     )
@@ -203,7 +203,7 @@ def execute_dispatch_step(title, agent, agent_role, script, mode_total_steps, po
         mode_script = get_mode_script_path(script)
         invoke_cmd = f"python3 -m {mode_script} --step 1 --state-dir {state_dir}"
 
-        dispatch_prompt = subagent_dispatch(
+        dispatch_prompt = agent_dispatch(
             agent_type=agent,
             command=invoke_cmd,
         )
@@ -295,6 +295,19 @@ STEPS = {
             "   - ship/deploy command and any env it needs",
             "   - live check method: how to observe the deployed system as each role",
             "     (driver, accounts, cache clearing) -- or 'none: <reason>'",
+            "10. OUTSIDE_ACTIONS: ASK THE OWNER (AskUserQuestion) which actions outside the",
+            "   local repo this plan will need, so they can be pre-approved ONCE instead of",
+            "   blocking the run one command at a time. Cover each kind:",
+            "   - GitHub writes (gh issue close/comment, PRs)",
+            "   - cloud CLIs (az, aws, gcloud) and remote commands on a VM",
+            "   - secret / Key Vault / credential reads, database reads on live systems",
+            "   - deploys and the ship command",
+            "   - git pushes, and WHEN to push main: after_each_wave | at_end | never",
+            "     (default at_end; push matters because isolated worktrees start from origin/main)",
+            "   Record each as an exact Claude Code permission rule plus why, e.g.",
+            "   Bash(gh issue:*) -- close the tracking issue. Never grant a permission yourself.",
+            "11. REPO_PATH: absolute path of the repository agents will work in",
+            "   (git rev-parse --show-toplevel inside the project).",
             "",
             "FORMAT: High signal-to-noise. File refs over content. No ASCII diagrams.",
             "",
@@ -330,6 +343,18 @@ STEPS = {
             "[ ] 6. Reference documentation paths captured or explicit 'none'",
             "[ ] 7. verification_env names unit, integration, ship and live methods",
             "       (or 'none: <reason>' per layer) -- the executor's gates run these",
+            "",
+            "[ ] 8. Outside actions asked of the owner and recorded (step below), or the",
+            "       owner said the plan needs none",
+            "",
+            "RECORD THE EXECUTION POLICY in plan.json (only what the owner confirmed):",
+            "  python3 -m skills.planner.cli.plan --state-dir $STATE_DIR set-execution-policy \\",
+            "    --repo-path /abs/path/to/repo --push-policy at_end \\",
+            "    --permission 'Bash(gh issue:*) => close the tracking issue' \\",
+            "    --permission 'Bash(az vm run-command:*) => read-only remote checks'",
+            "  (--permission repeats; each is '<exact permission rule> => <why>'. Batch form:",
+            "   method set-execution-policy, params {repo_path, push_policy,",
+            "   required_permissions: [{rule, why}]}. Omit --permission if none are needed.)",
             "",
             "IF ANY CHECK FAILS: gather missing context via AskUserQuestion or exploration.",
         ],
@@ -448,7 +473,7 @@ STATE_DIR is a temp directory, so first make the plan durable:
    (<DEST>.context.json carries verification_env: the unit, integration,
    ship and live-check commands the executor's gates run.)
    Commit them if the project keeps plans in git.
-
+{permissions}
 2. PRESENT to the user, as the LAST thing in your reply, this prompt in a
    fenced code block, with <DEST> replaced by the absolute path you used:
 
@@ -477,11 +502,23 @@ def format_handoff(state_dir: str, plan_md: str) -> str:
     files, and the user needs a paste-ready prompt that starts the executor.
     """
     from pathlib import Path
+    import json
+    from skills.planner.shared.permissions import permissions_block, push_policy_line
     sd = Path(state_dir)
+    try:
+        plan = json.loads((sd / "plan.json").read_text())
+    except (OSError, ValueError):
+        plan = {}
+    perm_text = "\n".join(
+        ["", "   The executor asks the owner to add these permissions before it starts;",
+         "   mention them in your reply so they can be added early:", ""]
+        + ["   " + line for line in [push_policy_line(plan), *permissions_block(plan)]]
+    ) + "\n"
     return HANDOFF_TEMPLATE.format(
         plan_md=plan_md,
         plan_json=sd / "plan.json",
         context_json=sd / "context.json",
+        permissions=perm_text,
     )
 
 

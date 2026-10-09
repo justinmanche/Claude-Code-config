@@ -17,6 +17,11 @@ It records PASS items for high-risk checks too, so the file shows coverage,
 and returns one word (FAIL if any item failed). Severity rules per phase are
 in each `*_review.py` (MUST blocks always, SHOULD iterations 1-3, COULD 1-2).
 
+The plan-design reviewer also fails (MUST) a single-pattern absence criterion
+and a data-changing milestone without a multi-step live sequence, and flags
+(SHOULD) outside actions missing from `required_permissions`. The live
+regression sweep runs save/modify/reload sequences over changed code.
+
 ## Re-verify (one agent, only after a fix)
 
 Dispatched by `shared/qr/loop.reverify_step` with `--qr-item` for every

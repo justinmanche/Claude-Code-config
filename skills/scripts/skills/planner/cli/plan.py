@@ -73,7 +73,8 @@ except ImportError:
 
 ROLE_PERMISSIONS = {
     "architect": {"init", "set-milestone", "set-intent", "set-decision",
-                  "set-diagram", "add-diagram-node", "add-diagram-edge"},
+                  "set-execution-policy", "set-diagram", "add-diagram-node",
+                  "add-diagram-edge"},
     "developer": {"set-change"},
     "tw": {"set-doc", "set-readme", "set-diagram-render",
            "set-doc-diff", "create-doc-change"},
@@ -386,6 +387,49 @@ class SetVerificationCommand(Command):
             return
         print_entity_result(EntityResult(id=result["id"], version=result["version"],
                                          operation="updated"))
+
+
+class SetExecutionPolicyCommand(Command):
+    name = "set-execution-policy"
+    help = "Set the plan's repo path, push policy and required permissions"
+    role = "architect"
+
+    @classmethod
+    def add_arguments(cls, p: argparse.ArgumentParser) -> None:
+        p.add_argument("--repo-path", help="Absolute path of the repository the executor works in")
+        p.add_argument("--push-policy", choices=["after_each_wave", "at_end", "never"],
+                       help="When the orchestrator pushes main (default at_end)")
+        p.add_argument("--permission", action="append", dest="permissions",
+                       help="'<exact permission rule> => <why>' e.g. 'Bash(gh issue:*) => close the tracking issue' "
+                            "(repeatable; upserts by rule)")
+        p.add_argument("--replace-permissions", action="store_true",
+                       help="Replace the whole list instead of upserting")
+
+    @classmethod
+    def run(cls, args: argparse.Namespace) -> None:
+        from .plan_commands import PlanContext, set_execution_policy
+        from pathlib import Path
+        perms = None
+        if args.permissions is not None:
+            perms = []
+            for entry in args.permissions:
+                rule, sep, why = entry.partition("=>")
+                if not sep:
+                    error_exit(f"--permission needs '<rule> => <why>', got: {entry}")
+                    return
+                perms.append({"rule": rule.strip(), "why": why.strip()})
+        ctx = PlanContext(state_dir=Path(get_state_dir()))
+        try:
+            result = set_execution_policy(ctx, repo_path=args.repo_path,
+                                          push_policy=args.push_policy,
+                                          required_permissions=perms,
+                                          replace_permissions=args.replace_permissions)
+        except ValueError as e:
+            error_exit(str(e))
+            return
+        print(f"execution policy: push_policy={result['push_policy']} "
+              f"required_permissions={result['required_permissions']} "
+              f"repo_path={result['repo_path']}")
 
 
 class SetIntentCommand(Command):
@@ -995,6 +1039,22 @@ def translate_to_markdown(plan: "Plan") -> str:
             lines.append(f"[Diagram pending Technical Writer rendering: {dg.id}]")
         lines.append("")
 
+    # Execution settings
+    if plan.required_permissions or plan.push_policy != "at_end" or plan.repo_path:
+        lines.append("## Execution Settings")
+        lines.append("")
+        if plan.repo_path:
+            lines.append(f"**Repository**: {plan.repo_path}")
+            lines.append("")
+        lines.append(f"**Push policy**: {plan.push_policy}")
+        lines.append("")
+        if plan.required_permissions:
+            lines.append("**Required permissions** (the owner adds these via /permissions before execution):")
+            lines.append("")
+            for rp in plan.required_permissions:
+                lines.append(f"- `{rp.rule}` -- {rp.why}")
+            lines.append("")
+
     # Planning Context
     if plan.planning_context.decisions:
         lines.append("## Planning Context")
@@ -1361,6 +1421,7 @@ COMMANDS: list[type[Command]] = [
     InitCommand,
     SetMilestoneCommand,
     SetVerificationCommand,
+    SetExecutionPolicyCommand,
     SetIntentCommand,
     SetDecisionCommand,
     SetDiagramCommand,
