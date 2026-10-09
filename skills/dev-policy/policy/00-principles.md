@@ -55,7 +55,7 @@ _Example:_ `formatInvoiceDate()` and `formatAuditDate()` may share one implement
 
 **PRIN-15** SHOULD choose well-understood technology for everything that does not differentiate the product. Each novel tool costs attention that is then unavailable for the product. Spend "innovation tokens" only where the product is different.
 
-**PRIN-16** MUST record any decision that a later reader would otherwise re-derive (the choice, the alternatives, why) in the project's decision record, in the same change that makes it (see `10-documentation-and-decisions.md`).
+**PRIN-16** MUST record any decision that a later reader would otherwise re-derive (the choice, the alternatives, why) as a WHY comment beside the code or in the component README, in the same change that makes it; a direction knowingly below the standard goes in the risk register with an owner and a reopen trigger. There is no separate decision record (see `10-documentation-and-decisions.md`).
 
 ## 8. Sources
 

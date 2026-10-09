@@ -48,7 +48,7 @@ Contents: 1 Classification · 2 Residency · 3 Collection and use · 4 Retention
 
 ## 7. Evidence for assessors
 
-**PRIV-16** MUST keep the artefacts an assessor will ask for current and findable: the architecture description, the risk register, the decision record, the control mapping (ISM, Essential Eight or the applicable regime), the incident records, the tested backup restore, the retention schedule and the privacy policy.
+**PRIV-16** MUST keep the artefacts an assessor will ask for current and findable: the architecture description, the risk register, the component documentation that carries the design reasoning, the control mapping (ISM, Essential Eight or the applicable regime), the incident records, the tested backup restore, the retention schedule and the privacy policy.
 
 **PRIV-17** MUST produce an application self-assessment against the applicable control catalogue (for Australia, the ISM, with ASVS as the web-application standard it names) before the first customer commitment, and keep it versioned with the code.
 

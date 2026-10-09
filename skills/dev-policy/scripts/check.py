@@ -2,9 +2,13 @@
 """dev-policy definition-of-done checks.
 
 Runs read-only checks against everything changed since the merge base (committed
-on this branch, staged, unstaged, untracked), limited to the project's code paths,
-and writes a stamp keyed by a fingerprint of that change so the Stop hook can tell
-whether the current code state has passed.
+on this branch, staged, unstaged, untracked), limited to the project's code paths
+(never anything under .claude/worktrees/), and writes two stamps:
+  - one keyed by a fingerprint of that change, so the end-of-reply hook and the agent
+    self-check can tell whether the current working state has passed;
+  - when the working tree is clean, one keyed by the git TREE hash of HEAD, shared by
+    every worktree, so the merge / push / deploy gates can tell whether an exact
+    committed state has passed (run it on a clean branch checkout to unlock a merge).
 
 Checks (each reports PASS / WARN / FAIL; FAIL makes the exit code non-zero):
   typecheck    tsc on each workspace with changed TypeScript (project config or auto-detect)
@@ -33,7 +37,7 @@ TEST_RE = re.compile(r"(\.test\.|\.spec\.|(^|/)__tests__/|(^|/)__integration__/|
 
 # (name, regex on an added line, severity, applies-to-tests?, message)
 LINE_PATTERNS = [
-    ("any", re.compile(r"(:\s*any\b|\bas\s+any\b|<any>)"), "FAIL", False, "new `any` (CODE-26) — use `unknown` and narrow, or justify inline"),
+    ("any", re.compile(r"(:\s*any\b|\bas\s+any\b|<any>|\btype\s+\w+(?:<[^>]*>)?\s*=\s*any\b)"), "FAIL", False, "new `any` (CODE-26) — use `unknown` and narrow, or justify inline with `// eslint-disable-next-line @typescript-eslint/no-explicit-any -- <reason>`"),
     ("ts-ignore", re.compile(r"@ts-ignore"), "FAIL", False, "`@ts-ignore` (CODE-27) — fix the type or use @ts-expect-error with a reason"),
     ("lint-disable-no-reason", re.compile(r"eslint-disable(?:-next-line|-line)?(?![^\n]*--\s*\S)"), "FAIL", True, "lint rule disabled without `-- reason` (CODE-31)"),
     ("empty-catch", re.compile(r"catch\s*(\([^)]*\))?\s*\{\s*\}"), "FAIL", False, "empty catch block (CODE-14) — handle, log with context, or explain why it is ignorable"),
@@ -104,10 +108,19 @@ def check_lint(root, cfg, changed, rep):
     if not files:
         rep.add("lint", "PASS", "no lintable files changed")
         return
-    has_cfg = any(os.path.exists(os.path.join(root, n)) for n in (".eslintrc.cjs", ".eslintrc.js", ".eslintrc.json", "eslint.config.js", "eslint.config.mjs")) \
-        or any(os.path.exists(os.path.join(root, f.split("/")[0], n)) for f in files for n in (".eslintrc.cjs", ".eslintrc.js", ".eslintrc.json", "eslint.config.js", "eslint.config.mjs"))
-    if not has_cfg:
-        rep.add("lint", "WARN", "no eslint config found")
+    names = (".eslintrc.cjs", ".eslintrc.js", ".eslintrc.json", "eslint.config.js", "eslint.config.mjs")
+    root_cfg = any(os.path.exists(os.path.join(root, n)) for n in names)
+    # Only lint files a config covers: one ESLint call over a mix of configured and
+    # unconfigured packages aborts on the first unconfigured file and fails them all.
+    unconfigured = [] if root_cfg else [f for f in files
+                                        if not any(os.path.exists(os.path.join(root, f.split("/")[0], n)) for n in names)]
+    files = [f for f in files if f not in unconfigured]
+    if unconfigured:
+        dirs = sorted({f.split("/")[0] for f in unconfigured})
+        rep.add("lint", "WARN", f"no eslint config for {', '.join(dirs)}/ — {len(unconfigured)} file(s) not linted")
+    if not files:
+        if not unconfigured:
+            rep.add("lint", "WARN", "no eslint config found")
         return
     cmd = f"{cfg['checks'].get('lint', 'npx eslint')} {' '.join(files)}"
     code, out = dp.run(cmd, root, timeout=600)
@@ -125,13 +138,20 @@ def check_patterns(root, cfg, base, changed, rep):
         if not lines:
             continue
         test = is_test_file(rel)
-        joined = "\n".join(lines)
         for name, rx, sev, applies_to_tests, msg in LINE_PATTERNS:
             if test and not applies_to_tests:
                 continue
             if name == "empty-catch":
-                if rx.search(joined):
+                if dp.multiline_matches_on_added(root, base, rel, rx):
                     findings[sev].append(f"{rel}: {msg}")
+                continue
+            if name == "any":
+                # An `any` the line itself or the line above justifies with a reasoned
+                # no-explicit-any disable is the documented exception, the same rule ESLint
+                # enforces; anything else is a new `any`.
+                hit = dp.first_unjustified_any(root, base, rel, rx)
+                if hit:
+                    findings[sev].append(f"{rel} (line {hit}): {msg}")
                 continue
             for i, line in enumerate(lines):
                 if rx.search(line):
@@ -302,6 +322,35 @@ def check_contract(root, cfg, changed, rep):
     rep.add("contract", "WARN" if warns else "PASS", "\n".join(warns) if warns else "contract and routes changed together, or neither")
 
 
+def failure_lines(rep):
+    """One short text per FAIL row, for the stamp (the gates quote these to the agent)."""
+    out = []
+    for check, status, detail in rep.rows:
+        if status == "FAIL":
+            lines = [l for l in (detail or "").splitlines() if l.strip()]
+            out.append(f"{check}: " + " | ".join(lines[:6])[:700])
+    return out
+
+
+def write_stamps(root, fp, status, started, files, complete, failures):
+    """Write the per-checkout stamp and, for a clean tree, the shared per-tree stamp."""
+    clean = dp.is_clean(root)
+    tree = dp.head_tree(root)
+    record = {
+        "fingerprint": fp, "status": status, "time": started, "files": files,
+        "tree": tree, "clean": clean, "complete": complete, "failures": failures,
+    }
+    dp.write_stamp(root, record)
+    if clean and tree:
+        code, branch = dp.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], root)
+        dp.record_tree_stamp(root, tree, {
+            "status": status, "time": started, "complete": complete, "failures": failures,
+            "branch": branch.strip() if code == 0 else "", "files": len(files),
+        })
+        return f"recorded for tree {tree[:10]}"
+    return "NOT recorded: the working tree has uncommitted changes, so the merge/push/deploy gates will not accept this run. Commit, then run the check again."
+
+
 def main():
     args = set(sys.argv[1:])
     root = dp.repo_root()
@@ -313,9 +362,10 @@ def main():
     fp, _ = dp.fingerprint(root, cfg)
     rep = Report()
     started = time.time()
+    complete = "--no-typecheck" not in args and "--no-lint" not in args
     if not changed:
         print("dev-policy check: nothing changed since the merge base — nothing to check.")
-        dp.write_stamp(root, {"fingerprint": fp, "status": "pass", "time": started, "files": []})
+        write_stamps(root, fp, "pass", started, [], complete, [])
         return 0
     print(f"dev-policy check — {len(changed)} changed file(s) since {base[:10]}:")
     for f in changed[:30]:
@@ -335,7 +385,10 @@ def main():
     status = "fail" if rep.failed else "pass"
     print(rep.render())
     print(f"\nRESULT: {status.upper()}  ({time.time() - started:.0f}s)" + ("" if status == "pass" else "  — fix every FAIL above, then re-run"))
-    dp.write_stamp(root, {"fingerprint": fp, "status": status, "time": started, "files": changed})
+    note = write_stamps(root, fp, status, started, changed, complete, failure_lines(rep))
+    print(f"gate stamp: {note}")
+    if not complete:
+        print("note: --no-typecheck/--no-lint runs are partial and never satisfy the merge/push/deploy gates.")
     if "--json" in args:
         print(json.dumps({"status": status, "rows": rep.rows}))
     return 1 if rep.failed else 0

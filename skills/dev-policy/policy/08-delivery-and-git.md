@@ -54,7 +54,7 @@ Contents: 1 Batches and branches · 2 Gates · 3 Commits · 4 Merging · 5 Relea
 
 ## 7. Repository hygiene
 
-**DELIV-19** MUST NOT leave work parked: no stashes at the end of a turn, no tags, no idle merged branches, no untracked files, no plan document without an active-plan header. Finished means closed (decisions recorded, risks registered, leftovers in issues, files deleted).
+**DELIV-19** MUST NOT leave work parked: no stashes at the end of a turn, no tags, no idle merged branches, no untracked files, no plan document without an active-plan header. Finished means closed (decisions explained beside the code, risks registered, leftovers in issues, files deleted).
 
 **DELIV-20** MUST keep the repository in a state where a new session, human or agent, can start from the index files alone: build and test commands correct, docs matching the code, nothing described as "in progress" that is not.
 

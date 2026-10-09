@@ -12,7 +12,7 @@ Contents: 1 Same change, same commit · 2 One document, one purpose · 3 Decisio
 
 ## 2. One document, one purpose
 
-**DOC-03** MUST keep each long-lived document single-purpose and named for that purpose: a runbook, a risk register, a decision record, an architecture description, a setup guide. Never grow one into another ("the runbook that also holds the register").
+**DOC-03** MUST keep each long-lived document single-purpose and named for that purpose: a runbook, a risk register, an architecture description, a setup guide. Never grow one into another ("the runbook that also holds the register").
 
 **DOC-04** SHOULD organise reference material along Diátaxis lines (tutorials, how-to guides, reference, explanation) and keep each type separate; a how-to that stops to explain history is neither.
 
@@ -20,11 +20,11 @@ Contents: 1 Same change, same commit · 2 One document, one purpose · 3 Decisio
 
 ## 3. Decisions
 
-**DOC-06** MUST record every decision a later reader would otherwise re-derive: the context, the choice, the alternatives rejected and why, the date. One decision record per repository (or one file per decision in an `adr/` folder) with stable ids; entries are never edited after the fact, only superseded by a new entry that links back.
+**DOC-06** MUST keep the context, the choice, the alternatives rejected and why, and the date of every decision a later reader would otherwise re-derive where that reader meets it: a WHY comment beside the code, or the README of the component it shapes. A direction that is knowingly below the standard is an accepted risk, not a decision: it goes in the risk register with an owner and a reopen trigger (§4). There is no separate decision record: it duplicates the code comments and the risk register and drifts from both.
 
-**DOC-07** MUST reference the decision id from the code it shaped (`// DL-012: …`) where the choice is non-obvious at the point of reading.
+**DOC-07** MUST NOT cite an identifier from a document that can be deleted or renumbered (a plan's decision ids, a ticket number standing in for the reason) in place of the reason. State the reason in the comment itself, in a sentence a reader can use without leaving the file.
 
-**DOC-08** MUST record a decision in the same change that makes it. A decision that exists only in a plan, a conversation or a planning artefact is lost when the plan is deleted.
+**DOC-08** MUST write the reasoning in the same change that makes the decision. A decision that exists only in a plan, a conversation or a planning artefact is lost when the plan is deleted.
 
 ## 4. Risks
 
@@ -34,7 +34,7 @@ Contents: 1 Same change, same commit · 2 One document, one purpose · 3 Decisio
 
 ## 5. Plans
 
-**DOC-11** MUST treat a plan as a working document with an end date: it carries a tracking issue and a review-by date, and it is deleted when the work finishes. Its decisions go to the decision record, its carried gaps to the risk register, its leftovers to issues. Finished plans with stale status lines are the main source of misleading documentation.
+**DOC-11** MUST treat a plan as a working document with an end date: it carries a tracking issue and a review-by date, and it is deleted when the work finishes. Its decisions go to WHY comments beside the code or the component README, its carried gaps to the risk register, its leftovers to issues. Finished plans with stale status lines are the main source of misleading documentation.
 
 **DOC-12** MUST NOT keep generated planning artefacts (diff bundles, state files) in the repository once merged; git history already holds the result.
 
@@ -62,8 +62,6 @@ Contents: 1 Same change, same commit · 2 One document, one purpose · 3 Decisio
 
 ## 9. Sources
 
-- Documenting architecture decisions, Nygard (2011): https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions
-- ADR organisation: https://adr.github.io/
 - Diátaxis: https://diataxis.fr/
 - Claude Code memory and CLAUDE.md guidance: https://code.claude.com/docs/en/memory
 - Claude Code best practices: https://code.claude.com/docs/en/best-practices
