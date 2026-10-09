@@ -56,10 +56,12 @@ The map from file paths to sections is `paths.default.json` (a project may add t
 
 Enforcement happens where code leaves the owner's hands, not at the end of every reply: the gates deny `git merge <branch>` into main, `git push` (and the repo's git `pre-push` hook) and the project's deploy script until `check.py` has PASSED on the exact committed tree, and a subagent that changed code is checked and blocked once when it finishes. Run the check on the clean, committed branch before handing work on.
 
+**Optional merge-via-pull-request mode.** A project that sets `"merge_via_pr": {"branch": "main", "required_check": "validate"}` in `.claude/dev-policy.json` runs its full suites only in CI and merges only through a pull request: the gates then also deny `git merge` into the protected branch and any `git push` that updates it, and allow `gh pr merge` only when the pull request's required check concluded success on its current head (denied while pending, failed or missing; denied if `gh` errors). Locally you run only the tests that cover your change. See `README.md` and `policy/08-delivery-and-git.md` (DELIV-21).
+
 - [ ] Applicable sections were read before the change; the rules applied are named in the commit or plan.
 - [ ] Tests exist at the prescribed layer, including the negative authorisation case for anything tenant-scoped; no test was weakened.
 - [ ] `python3 ~/.claude/skills/dev-policy/scripts/check.py` ran on the final **committed, clean** state and every FAIL is fixed or explicitly accepted by the owner (this is what unlocks merge, push and deploy).
-- [ ] Type check, lint and the relevant suites ran; the output is in the transcript (the gates also look for a test command on record when implementation code changed).
+- [ ] Type check, lint and the tests that cover the change ran (the changed or added test files, `jest --findRelatedTests`, `vitest related`); the output is in the transcript (the gates also look for a test command on record when implementation code changed). In merge-via-PR mode the full suites run in CI on the pull request.
 - [ ] User-visible behaviour was exercised at the user's layer on the real build.
 - [ ] Documentation updated, decisions explained beside the code, and accepted risks registered in the same change; nothing left parked.
 

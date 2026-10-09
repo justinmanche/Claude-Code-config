@@ -24,6 +24,7 @@ DEFAULT_CONFIG = {
     "overlay": [],
     "codePaths": [],  # empty = whole repo minus the exclusions below
     "implPaths": "",  # regex: implementation (non-test) code that must have a test run on record; empty = any src/ directory
+    "merge_via_pr": None,  # opt-in {"branch": "main", "required_check": "validate"}: merges only via a PR whose CI check passed
     "excludePaths": ["node_modules/", "dist/", "build/", "coverage/", ".git/", "generated/", ".claude/worktrees/"],
     "paths": [],
     "checks": {
@@ -77,7 +78,7 @@ def load_config(root):
             user = json.load(fh)
     except Exception:
         return cfg
-    for key in ("overlay", "codePaths", "excludePaths", "implPaths"):
+    for key in ("overlay", "codePaths", "excludePaths", "implPaths", "merge_via_pr"):
         if key in user:
             cfg[key] = user[key]
     if "paths" in user:

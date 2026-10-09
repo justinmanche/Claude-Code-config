@@ -20,6 +20,8 @@ Contents: 1 Batches and branches · 2 Gates · 3 Commits · 4 Merging · 5 Relea
 
 **DELIV-06** MUST keep every commit on `main` building and passing, so `git bisect` and `git revert` keep working.
 
+**DELIV-21** MAY run the full suites only in CI on the pull request instead of locally, when the project sets `merge_via_pr` in `.claude/dev-policy.json`. Then every merge into `main` goes through a pull request whose required CI check passed on its current head, and locally you run only the tests covering your change (the changed or added test files, `jest --findRelatedTests`, `vitest related`). The hooks deny a local merge into `main`, a push that updates `main`, and `gh pr merge` while the check is pending, failed or missing (or `gh` cannot be asked). Where the host offers branch protection, use that too; the hook exists for plans that do not. Keep CI to one consolidated job and let a docs-only pull request finish green quickly inside the job (no workflow-level path filter, which would leave no status to read).
+
 ## 3. Commits
 
 **DELIV-07** MUST write commit messages as Conventional Commits: `type(scope): imperative summary` with types `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `perf`, `build`, `ci`; `!` or a `BREAKING CHANGE:` footer for breaking changes. Subject ≤ 72 characters.

@@ -22,6 +22,16 @@ WHY THESE GATES AND NOT OTHERS (owner decision, 2026-10-07).
   - The bypass for a push is `--no-verify`, and every gate fails OPEN if the hook
     itself breaks: a broken gate must not lock the owner out of their own repository.
 
+OPT-IN MERGE-VIA-PULL-REQUEST MODE (owner decision, 2026-10-09). A project whose
+`.claude/dev-policy.json` has `"merge_via_pr": {"branch": "main", "required_check": "validate"}`
+runs its full test suites only in CI, on the pull request, and merges only through that
+pull request. The private GitHub Free plan has no branch protection, so this gate is the
+enforcement. In that mode: `git merge <branch>` while on the protected branch is denied; a
+`git push` that updates the protected branch is denied (also in the git pre-push hook);
+`gh pr merge` is allowed only when the pull request's required check has concluded success
+on the PR's current head, and fails CLOSED (denies) when gh is missing or errors. Pushing any
+other branch keeps the check.py rule. Tests mock gh through PATH; they never call GitHub.
+
 Modes (first argument; hook input JSON on stdin):
   pre-bash      PreToolUse on Bash. Denies `git merge <branch>` while on main, `git push`
                 and `deploy-test.sh` unless check.py has PASSED on the exact committed
@@ -62,6 +72,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import traceback
 
@@ -78,6 +89,10 @@ TERMINAL_STATUSES = ("completed", "failed", "killed", "cancelled", "canceled", "
 DEFAULT_IMPL = r"(^|/)src/"
 TEST_PATH_RE = re.compile(r"(\.test\.|\.spec\.|(^|/)__tests__/|(^|/)__integration__/|(^|/)e2e/|(^|/)tests?/)")
 CHECK_TIMEOUT = 840
+GH_TIMEOUT = 25
+# The full suites run in CI on the pull request; locally only the tests that cover the change.
+TESTS_HINT = ("run the tests that cover your change (the changed or added test files, `jest --findRelatedTests <files>`, "
+              "`vitest related <files>`); the full suites run in CI on the pull request")
 
 
 # ----------------------------------------------------------------------------------
@@ -659,6 +674,22 @@ def signature(*parts):
 # Gate messages (plain English; they are shown to the agent and the owner)
 # ----------------------------------------------------------------------------------
 
+def merge_via_pr_cfg(cfg):
+    """{"branch", "required_check"} when the project opted into merge-via-PR, else None."""
+    mp = cfg.get("merge_via_pr")
+    if mp is True:
+        mp = {}
+    if not isinstance(mp, dict):
+        return None
+    return {"branch": str(mp.get("branch") or "main"), "required_check": str(mp.get("required_check") or "validate")}
+
+
+def pr_flow_text(mp):
+    return (f"push the branch (`git push -u origin <branch>`), open a pull request (`gh pr create`), let CI run the full "
+            f"test suites, then `gh pr merge <number>` once the CI check '{mp['required_check']}' has passed. "
+            f"The gate allows `gh pr merge` only after that check has passed on the pull request's current head.")
+
+
 def stamp_problem(root, tree, label):
     """None when check.py has PASSED on this exact committed tree, else why not."""
     st = dp.lookup_tree_stamp(root, tree)
@@ -700,7 +731,7 @@ def _tests_problem(payload, root, cfg, files):
         return None
     if tests_missing(load_events(tp), root, cfg, True, False):
         return ("implementation code changed (" + ", ".join([f for f in files if is_impl_path(f, cfg)][:3]) +
-                ") but no test command (npm test, jest, vitest, playwright) is on record in this session; run the test suites first")
+                ") but no test command (npm test, jest, vitest, playwright) is on record in this session; " + TESTS_HINT)
     return None
 
 
@@ -708,8 +739,10 @@ def gate_merge(args, cwd, payload, sim_branch):
     root = dp.repo_root(cwd)
     if not wired(root):
         return []
+    cfg = dp.load_config(root)
+    mp = merge_via_pr_cfg(cfg)
     branch = sim_branch.get(root) or current_branch(root)
-    if branch not in MAIN_BRANCHES:
+    if branch not in MAIN_BRANCHES and not (mp and branch == mp["branch"]):
         return []
     head_ref = branch if root in sim_branch else "HEAD"  # an earlier `git checkout main` in the same command line
     if any(a in ("--abort", "--continue", "--quit") for a in args):
@@ -722,12 +755,16 @@ def gate_merge(args, cwd, payload, sim_branch):
             skip = True
         elif not a.startswith("-"):
             refs.append(a)
-    cfg = dp.load_config(root)
     problems, unlock_branch = [], ""
     for ref in refs:
         tree = dp.tree_of(root, ref)
         if not tree or is_ancestor(root, ref, head_ref):
             continue  # unknown ref (git itself will complain) or nothing to merge
+        if mp and branch == mp["branch"]:
+            if re.fullmatch(r"[^/]+/" + re.escape(mp["branch"]), ref):
+                continue  # syncing from the remote copy of the protected branch (after the PR was merged on GitHub)
+            problems.append(f"merging '{ref}' into {branch}: this project merges into {branch} only through a pull request")
+            continue
         code, base = dp.run(["git", "merge-base", head_ref, ref], root)
         files = dp.code_files_between(root, cfg, base.strip(), ref) if code == 0 else []
         if code == 0 and not files:
@@ -739,6 +776,8 @@ def gate_merge(args, cwd, payload, sim_branch):
         t = _tests_problem(payload, root, cfg, files)
         if t:
             problems.append(f"merging '{ref}' into {branch}: {t}")
+    if mp and branch == mp["branch"] and problems:
+        return [deny_text(problems, "Instead: " + pr_flow_text(mp))]
     return problems and [deny_text(problems, how_to_unlock(root, unlock_branch))]
 
 
@@ -761,7 +800,31 @@ def push_problems(root, tips):
     return problems, allfiles, first
 
 
-def gate_push(args, cwd, payload):
+def push_targets_protected(mp, positional, flags, branch):
+    """The refspecs of this push that would update the protected branch (explicit, HEAD:main, or a bare push on it)."""
+    if "--all" in flags or "--mirror" in flags:
+        return ["--all/--mirror (includes the protected branch)"]
+    refspecs = positional[1:]
+    hits = []
+    if not refspecs:
+        if branch == mp["branch"]:
+            hits.append(f"a bare push while on {branch}")
+        return hits
+    for rs in refspecs:
+        if rs.startswith(":"):
+            continue  # deleting a remote ref
+        src, _, dst = rs.lstrip("+").partition(":")
+        target = dst or src
+        if target in ("HEAD", "@"):
+            target = branch
+        if target.startswith("refs/heads/"):
+            target = target[len("refs/heads/"):]
+        if target == mp["branch"]:
+            hits.append(rs)
+    return hits
+
+
+def gate_push(args, cwd, payload, sim_branch=None):
     root = dp.repo_root(cwd)
     if not wired(root):
         return []
@@ -776,6 +839,13 @@ def gate_push(args, cwd, payload):
             skip = True
         elif not a.startswith("-"):
             positional.append(a)
+    mp = merge_via_pr_cfg(dp.load_config(root))
+    if mp:
+        branch = (sim_branch or {}).get(root) or current_branch(root)
+        hits = push_targets_protected(mp, positional, flags, branch)
+        if hits:
+            return [deny_text([f"pushing {', '.join(hits)} would update {mp['branch']}, which this project changes only "
+                               f"through a pull request"], "Instead: " + pr_flow_text(mp))]
     refspecs = positional[1:]
     tips = []
     if not refspecs or "--all" in flags or "--mirror" in flags:
@@ -791,6 +861,88 @@ def gate_push(args, cwd, payload):
     if t:
         problems.append(f"pushing: {t}")
     return problems and [deny_text(problems, how_to_unlock(root, first if first not in ("HEAD", "") else current_branch(root)))]
+
+
+_GH_VALUE_FLAGS = {"-b", "--body", "-F", "--body-file", "-t", "--subject", "-A", "--author-email", "--match-head-commit",
+                   "-R", "--repo"}
+
+
+def _gh_json(args, cwd):
+    """(returncode, parsed json or None, error text). Never raises."""
+    try:
+        p = subprocess.run(["gh", *args], cwd=cwd, capture_output=True, text=True, timeout=GH_TIMEOUT,
+                           stdin=subprocess.DEVNULL)
+    except Exception as exc:  # gh missing, timeout, ...
+        return 1, None, str(exc)
+    if p.returncode != 0:
+        return p.returncode, None, (p.stderr or p.stdout or "no output").strip()
+    try:
+        return 0, json.loads(p.stdout), ""
+    except ValueError:
+        return 1, None, "gh returned output that is not JSON"
+
+
+def _check_state(entry):
+    """('success' | 'pending' | 'failed', detail) for one statusCheckRollup entry."""
+    if "conclusion" in entry or "status" in entry:
+        if str(entry.get("status", "")).upper() != "COMPLETED":
+            return "pending", str(entry.get("status") or "not started").lower()
+        concl = str(entry.get("conclusion") or "").upper()
+        return ("success", concl) if concl == "SUCCESS" else ("failed", concl.lower() or "no conclusion")
+    st = str(entry.get("state") or "").upper()
+    if st == "SUCCESS":
+        return "success", st
+    return ("pending", st.lower()) if st in ("PENDING", "EXPECTED", "") else ("failed", st.lower())
+
+
+def gate_pr_merge(args, cwd):
+    """`gh pr merge ...`: allowed only when the PR's required check concluded success on its current head."""
+    root = dp.repo_root(cwd)
+    if not wired(root):
+        return []
+    mp = merge_via_pr_cfg(dp.load_config(root))
+    if not mp:
+        return []
+    if any(a in ("-h", "--help") for a in args):
+        return []
+    sel, repo, skip = [], [], False
+    for i, a in enumerate(args):
+        if skip:
+            skip = False
+        elif a in ("-R", "--repo") and i + 1 < len(args):
+            repo = ["--repo", args[i + 1]]
+            skip = True
+        elif a.startswith("--repo="):
+            repo = ["--repo", a.split("=", 1)[1]]
+        elif a in _GH_VALUE_FLAGS:
+            skip = True
+        elif not a.startswith("-"):
+            sel.append(a)
+    sel = sel[:1]
+    rc, data, err = _gh_json(["pr", "view", *sel, *repo, "--json", "number,state,baseRefName,headRefOid,statusCheckRollup"], root)
+    what = f"pull request {sel[0]}" if sel else "the pull request for the current branch"
+    if rc != 0 or not isinstance(data, dict):
+        return [deny_text([f"cannot verify CI for {what}: gh failed ({err}). The gate fails closed: it will not let a merge "
+                           f"through that it could not check"], "Fix gh (`gh auth status`, network), then retry.")]
+    if str(data.get("state", "")).upper() != "OPEN" or data.get("baseRefName") != mp["branch"]:
+        return []  # not an open PR into the protected branch: nothing for this gate to protect
+    num, head = data.get("number"), str(data.get("headRefOid") or "")[:8]
+    rollup = data.get("statusCheckRollup")
+    mine = [e for e in rollup if isinstance(e, dict) and (e.get("name") or e.get("context")) == mp["required_check"]] \
+        if isinstance(rollup, list) else []
+    where = f"pull request #{num} (head {head})"
+    watch = f"Watch it with `gh pr checks {num} --watch`, then retry."
+    if not mine:
+        return [deny_text([f"{where}: the CI check '{mp['required_check']}' has not reported on this head commit (missing: CI has "
+                           f"not started, or no run exists for this exact commit)"], f"Push or re-run the workflow. {watch}")]
+    latest = sorted(mine, key=lambda e: str(e.get("startedAt") or ""))[-1]
+    state, detail = _check_state(latest)
+    if state == "success":
+        return []
+    if state == "pending":
+        return [deny_text([f"{where}: the CI check '{mp['required_check']}' is still {detail} (pending)"], watch)]
+    return [deny_text([f"{where}: the CI check '{mp['required_check']}' FAILED ({detail})"],
+                      "Read the run's log (`gh run view --log-failed`), fix it, push, and wait for a green run.")]
 
 
 def _is_deploy(words):
@@ -863,7 +1015,13 @@ def evaluate_bash(payload):
             elif sub == "merge":
                 out += gate_merge(args, where, payload, sim)
             elif sub == "push":
-                out += gate_push(args, where, payload)
+                out += gate_push(args, where, payload, sim)
+            continue
+        if c.words and os.path.basename(c.words[0]) == "gh" and c.words[1:3] == ["pr", "merge"]:
+            try:
+                out += gate_pr_merge(c.words[3:], c.cwd)
+            except Exception as exc:  # fail CLOSED: a merge that could not be checked is not allowed
+                out.append(deny_text([f"cannot verify CI for this merge ({exc})"], ""))
             continue
         script = _is_deploy(c.words)
         if script:
@@ -948,13 +1106,13 @@ def subagent_self_check(payload):
     # branch other agents built was told to run tests for code it never touched.
     impl = own_impl_edits(events, root, cfg)
     if events and tests_missing(events, root, cfg, bool(impl), True):
-        problems.append("you changed implementation code (" + ", ".join(impl[:3]) + ") but no test command is on record after your last edit; run the relevant test suites")
+        problems.append("you changed implementation code (" + ", ".join(impl[:3]) + ") but no test command is on record after your last edit; " + TESTS_HINT)
     if not problems:
         return None
     memo_set(root, f"agent:{aid}", signature(fp, *problems))
     return ("Before you hand back: the development-policy self-check found problems in the code in your working directory.\n" +
             "\n".join(f"- {p}" for p in problems) +
-            f"\nFix them, re-run `{CHECK_CMD}` until it says PASS, run the tests, then report. This check will not ask again: "
+            f"\nFix them, re-run `{CHECK_CMD}` until it says PASS, run the tests that cover your change, then report. This check will not ask again: "
             "if a failure is not yours to fix (for example it comes from files you were told not to touch), say so plainly in your report.")
 
 
@@ -996,7 +1154,8 @@ def stop_reason(payload):
     memo_set(root, key, sig)
     return ("You edited code in this reply and it is not ready to leave your hands:\n" +
             "\n".join(f"- {p}" for p in problems) +
-            f"\nRun `{CHECK_CMD}`, fix every FAIL, run the test suites, resolve any hygiene item, then stop. "
+            f"\nRun `{CHECK_CMD}`, fix every FAIL, run the tests that cover your change (the changed or added test files, "
+            f"`jest --findRelatedTests`, `vitest related`; the full suites run in CI on the pull request), resolve any hygiene item, then stop. "
             "If something cannot be fixed, tell the owner plainly why.")
 
 
@@ -1025,10 +1184,19 @@ def mode_pre_push(argv):
         return 0
     zeros = set("0")
     tips = []
-    for line in sys.stdin.read().splitlines():
+    lines = sys.stdin.read().splitlines()
+    for line in lines:
         parts = line.split()
         if len(parts) >= 2 and not set(parts[1]) <= zeros:
             tips.append((parts[0].replace("refs/heads/", "", 1), parts[1]))
+    mp = merge_via_pr_cfg(dp.load_config(root))
+    if mp:
+        protected = [l for l in lines if len(l.split()) >= 4 and l.split()[2] == "refs/heads/" + mp["branch"]
+                     and not set(l.split()[1]) <= zeros]
+        if protected:
+            sys.stderr.write(deny_text([f"pushing to {mp['branch']} is not allowed: this project changes it only through a pull request"],
+                                       "Instead: " + pr_flow_text(mp)) + "\n(bypass deliberately with `git push --no-verify`)\n")
+            return 1
     problems, _, first = push_problems(root, tips)
     if not problems:
         return 0
